@@ -22,6 +22,61 @@ constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
 constexpr uint8_t CACHE_VERSION = 2;          // Increment when cache format changes
+// Find UTF-8 character boundary at or before pos
+size_t findUtf8Boundary(const std::string& str, size_t pos) {
+  if (pos >= str.length()) return str.length();
+  while (pos > 0 && (str[pos] & 0xC0) == 0x80) {
+    pos--;
+  }
+  return pos;
+}
+
+// Binary search to find max characters that fit in width.
+// When characterWrap is off, prefers breaking at word boundaries (spaces).
+size_t findBreakPosition(const GfxRenderer& renderer, int fontId, const std::string& line, int maxWidth) {
+  if (line.empty()) return 0;
+
+  int fullWidth = renderer.getTextWidth(fontId, line.c_str());
+  if (fullWidth <= maxWidth) {
+    return line.length();
+  }
+
+  size_t low = 0;
+  size_t high = line.length();
+  size_t bestFit = 1;
+
+  while (low < high) {
+    size_t mid = (low + high + 1) / 2;
+    mid = findUtf8Boundary(line, mid);
+
+    if (mid <= low) {
+      break;
+    }
+
+    int width = renderer.getTextWidth(fontId, line.substr(0, mid).c_str());
+    if (width <= maxWidth) {
+      bestFit = mid;
+      low = mid;
+    } else {
+      high = mid - 1;
+      if (high > 0) {
+        high = findUtf8Boundary(line, high);
+      }
+    }
+  }
+
+  // Try to break at word boundary (space) if character wrap is disabled
+  if (!SETTINGS.characterWrap && bestFit > 0 && bestFit < line.length()) {
+    size_t spacePos = line.rfind(' ', bestFit);
+    if (spacePos != std::string::npos && spacePos > 0) {
+      if (renderer.getTextWidth(fontId, line.substr(0, spacePos).c_str()) <= maxWidth) {
+        bestFit = spacePos;
+      }
+    }
+  }
+
+  return bestFit;
+}
 }  // namespace
 
 void TxtReaderActivity::onEnter() {
@@ -266,36 +321,24 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
     // Track position within this source line (in bytes from pos)
     size_t lineBytePos = 0;
 
-    // Word wrap if needed
+    // Word wrap if needed - use binary search for performance
     while (!line.empty() && static_cast<int>(outLines.size()) < linesPerPage) {
-      int lineWidth = renderer.getTextWidth(cachedFontId, line.c_str());
+      size_t breakPos = findBreakPosition(renderer, cachedFontId, line, viewportWidth);
 
-      if (lineWidth <= viewportWidth) {
+      if (breakPos >= line.length()) {
+        // Whole line fits
         outLines.push_back(line);
-        lineBytePos = displayLen;  // Consumed entire display content
+        lineBytePos = displayLen;
         line.clear();
         break;
       }
 
-      // Find break point
-      size_t breakPos = line.length();
-      while (breakPos > 0 && renderer.getTextWidth(cachedFontId, line.substr(0, breakPos).c_str()) > viewportWidth) {
-        // Try to break at space
-        size_t spacePos = line.rfind(' ', breakPos - 1);
-        if (spacePos != std::string::npos && spacePos > 0) {
-          breakPos = spacePos;
-        } else {
-          // Break at character boundary for UTF-8
-          breakPos--;
-          // Make sure we don't break in the middle of a UTF-8 sequence
-          while (breakPos > 0 && (line[breakPos] & 0xC0) == 0x80) {
-            breakPos--;
-          }
-        }
-      }
-
       if (breakPos == 0) {
         breakPos = 1;
+        // Ensure we don't break mid UTF-8 sequence
+        while (breakPos < line.length() && (line[breakPos] & 0xC0) == 0x80) {
+          breakPos++;
+        }
       }
 
       outLines.push_back(line.substr(0, breakPos));
