@@ -229,6 +229,17 @@ bool CrossPointSettings::loadFromBinaryFile() {
 }
 
 float CrossPointSettings::getReaderLineCompression() const {
+#ifndef OMIT_KOREAN_FONTS
+  switch (lineSpacing) {
+    case TIGHT:
+      return 1.00f;
+    case NORMAL:
+    default:
+      return 1.20f;
+    case WIDE:
+      return 1.40f;
+  }
+#else
   switch (fontFamily) {
     case BOOKERLY:
     default:
@@ -262,6 +273,7 @@ float CrossPointSettings::getReaderLineCompression() const {
           return 1.0f;
       }
   }
+#endif  // OMIT_KOREAN_FONTS
 }
 
 unsigned long CrossPointSettings::getSleepTimeoutMs() const {
@@ -308,6 +320,9 @@ int CrossPointSettings::getReaderFontId() const {
   if (hasCustomFont()) {
     return getCustomFontId();
   }
+#ifndef OMIT_KOREAN_FONTS
+  return KOPUB_14_FONT_ID;
+#else
   switch (fontFamily) {
     case BOOKERLY:
     default:
@@ -347,4 +362,13 @@ int CrossPointSettings::getReaderFontId() const {
           return OPENDYSLEXIC_14_FONT_ID;
       }
   }
+#endif  // OMIT_KOREAN_FONTS
+}
+
+int CrossPointSettings::getUiFontId() const {
+#ifndef OMIT_KOREAN_FONTS
+  return PRETENDARD_10_FONT_ID;
+#else
+  return UI_10_FONT_ID;
+#endif
 }

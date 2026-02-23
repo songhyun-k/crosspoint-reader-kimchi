@@ -1,5 +1,13 @@
 #pragma once
 
+// Korean fonts (default build)
+#ifndef OMIT_KOREAN_FONTS
+#include <builtinFonts/pretendard_10_regular.h>
+#include <builtinFonts/kopub_14_regular.h>
+#endif
+
+// Latin reader fonts (only when Korean fonts are excluded)
+#ifdef OMIT_KOREAN_FONTS
 #include <builtinFonts/bookerly_12_bold.h>
 #include <builtinFonts/bookerly_12_bolditalic.h>
 #include <builtinFonts/bookerly_12_italic.h>
@@ -16,7 +24,6 @@
 #include <builtinFonts/bookerly_18_bolditalic.h>
 #include <builtinFonts/bookerly_18_italic.h>
 #include <builtinFonts/bookerly_18_regular.h>
-#include <builtinFonts/notosans_8_regular.h>
 #include <builtinFonts/notosans_12_bold.h>
 #include <builtinFonts/notosans_12_bolditalic.h>
 #include <builtinFonts/notosans_12_italic.h>
@@ -49,7 +56,9 @@
 #include <builtinFonts/opendyslexic_8_bolditalic.h>
 #include <builtinFonts/opendyslexic_8_italic.h>
 #include <builtinFonts/opendyslexic_8_regular.h>
+#include <builtinFonts/notosans_8_regular.h>
 #include <builtinFonts/ubuntu_10_bold.h>
 #include <builtinFonts/ubuntu_10_regular.h>
 #include <builtinFonts/ubuntu_12_bold.h>
 #include <builtinFonts/ubuntu_12_regular.h>
+#endif  // OMIT_KOREAN_FONTS

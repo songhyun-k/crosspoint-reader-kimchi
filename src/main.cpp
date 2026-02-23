@@ -42,6 +42,17 @@ FontDecompressor fontDecompressor;
 Activity* currentActivity;
 
 // Fonts
+#ifndef OMIT_KOREAN_FONTS
+// Korean UI font (Pretendard 10pt) - Regular only, synthetic bold used when needed
+EpdFont pretendard10RegularFont(&pretendard_10_regular);
+EpdFontFamily pretendardFontFamily(&pretendard10RegularFont);
+
+// Korean reader font (KoPub Batang 14pt) - Regular only, synthetic bold used when needed
+EpdFont kopub14RegularFont(&kopub_14_regular);
+EpdFontFamily kopub14FontFamily(&kopub14RegularFont);
+#endif  // !OMIT_KOREAN_FONTS
+
+#ifdef OMIT_KOREAN_FONTS
 EpdFont bookerly14RegularFont(&bookerly_14_regular);
 EpdFont bookerly14BoldFont(&bookerly_14_bold);
 EpdFont bookerly14ItalicFont(&bookerly_14_italic);
@@ -129,6 +140,7 @@ EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
 EpdFont ui12RegularFont(&ubuntu_12_regular);
 EpdFont ui12BoldFont(&ubuntu_12_bold);
 EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
+#endif  // OMIT_KOREAN_FONTS
 
 // measurement of power button press duration calibration value
 unsigned long t1 = 0;
@@ -268,6 +280,15 @@ void setupDisplayAndFonts() {
     LOG_ERR("MAIN", "Font decompressor init failed");
   }
   renderer.setFontDecompressor(&fontDecompressor);
+#ifndef OMIT_KOREAN_FONTS
+  // Korean reader font
+  renderer.insertFont(KOPUB_14_FONT_ID, kopub14FontFamily);
+  // Korean UI font (Pretendard) — replaces Ubuntu for all UI font IDs
+  renderer.insertFont(PRETENDARD_10_FONT_ID, pretendardFontFamily);
+  renderer.insertFont(UI_10_FONT_ID, pretendardFontFamily);
+  renderer.insertFont(UI_12_FONT_ID, pretendardFontFamily);
+  renderer.insertFont(SMALL_FONT_ID, pretendardFontFamily);
+#else
   renderer.insertFont(BOOKERLY_14_FONT_ID, bookerly14FontFamily);
 #ifndef OMIT_FONTS
   renderer.insertFont(BOOKERLY_12_FONT_ID, bookerly12FontFamily);
@@ -286,6 +307,7 @@ void setupDisplayAndFonts() {
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
+#endif  // OMIT_KOREAN_FONTS
   LOG_DBG("MAIN", "Fonts setup");
 }
 

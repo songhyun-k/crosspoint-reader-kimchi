@@ -187,6 +187,7 @@ class CrossPointSettings {
     return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : 400;
   }
   int getReaderFontId() const;
+  int getUiFontId() const;
   bool hasCustomFont() const { return customFontPath[0] != '\0'; }
   int getCustomFontId() const;
 
