@@ -218,6 +218,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
           imageInfo.m_comps, imageInfo.m_MCUSPerRow, imageInfo.m_MCUSPerCol);
 
   // Safety limits to prevent memory issues on ESP32
+  // (checked before first pass to avoid wasting time on oversized images)
   constexpr int MAX_IMAGE_WIDTH = 2048;
   constexpr int MAX_IMAGE_HEIGHT = 3072;
   constexpr int MAX_MCU_ROW_BYTES = 65536;
@@ -226,6 +227,64 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
     LOG_DBG("JPG", "Image too large (%dx%d), max supported: %dx%d", imageInfo.m_width, imageInfo.m_height,
             MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT);
     return false;
+  }
+
+  // === First pass: scan entire JPEG to determine global brightness range ===
+  // Enables auto-contrast for covers with narrow brightness range (e.g. very light images)
+  bool useAutoContrast = false;
+  uint8_t acMin = 0;
+  uint16_t acScale_fp = 256;  // 1.0 in 8.8 fixed point (256 = no scaling)
+  {
+    uint8_t globalMin = 255, globalMax = 0;
+    const int acMcuW = imageInfo.m_MCUWidth;
+    const int acMcuH = imageInfo.m_MCUHeight;
+    bool ok = true;
+    for (int mcuY = 0; mcuY < imageInfo.m_MCUSPerCol && ok; mcuY++) {
+      for (int mcuX = 0; mcuX < imageInfo.m_MCUSPerRow && ok; mcuX++) {
+        if (pjpeg_decode_mcu() != 0) {
+          ok = false;
+          break;
+        }
+        for (int by = 0; by < acMcuH; by++) {
+          const int py = mcuY * acMcuH + by;
+          if (py >= imageInfo.m_height) continue;
+          for (int bx = 0; bx < acMcuW; bx++) {
+            const int px = mcuX * acMcuW + bx;
+            if (px >= imageInfo.m_width) continue;
+            const int bi = (by / 8) * (acMcuW / 8) + (bx / 8);
+            const int po = bi * 64 + (by % 8) * 8 + (bx % 8);
+            uint8_t g;
+            if (imageInfo.m_comps == 1) {
+              g = imageInfo.m_pMCUBufR[po];
+            } else {
+              g = (imageInfo.m_pMCUBufR[po] * 25 + imageInfo.m_pMCUBufG[po] * 50 + imageInfo.m_pMCUBufB[po] * 25) / 100;
+            }
+            if (g < globalMin) globalMin = g;
+            if (g > globalMax) globalMax = g;
+          }
+        }
+      }
+    }
+    if (ok) {
+      const uint8_t range = globalMax - globalMin;
+      if (range > 0 && range < 200) {
+        useAutoContrast = true;
+        acMin = globalMin;
+        acScale_fp = static_cast<uint16_t>((255u * 256u) / range);
+        LOG_DBG("JPG", "Auto-contrast: min=%d max=%d range=%d, stretching", globalMin, globalMax, range);
+      } else {
+        LOG_DBG("JPG", "Brightness range OK: min=%d max=%d range=%d", globalMin, globalMax, range);
+      }
+    }
+    // Reset JPEG file and decoder for second pass
+    jpegFile.seek(0);
+    context.bufferPos = 0;
+    context.bufferFilled = 0;
+    const unsigned char reinitStatus = pjpeg_decode_init(&imageInfo, jpegReadCallback, &context, 0);
+    if (reinitStatus != 0) {
+      LOG_ERR("JPG", "JPEG re-init for second pass failed: %d", reinitStatus);
+      return false;
+    }
   }
 
   // Calculate output dimensions (pre-scale to fit display exactly)
@@ -384,6 +443,17 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
 
           mcuRowBuffer[blockY * imageInfo.m_width + pixelX] = gray;
         }
+      }
+    }
+
+    // Apply auto-contrast stretching to the MCU row buffer
+    if (useAutoContrast) {
+      const int totalPixels = mcuPixelHeight * imageInfo.m_width;
+      for (int i = 0; i < totalPixels; i++) {
+        int stretched = (static_cast<int>(mcuRowBuffer[i] - acMin) * acScale_fp) >> 8;
+        if (stretched < 0) stretched = 0;
+        if (stretched > 255) stretched = 255;
+        mcuRowBuffer[i] = static_cast<uint8_t>(stretched);
       }
     }
 
