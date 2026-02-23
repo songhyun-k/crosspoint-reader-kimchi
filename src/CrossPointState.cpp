@@ -27,7 +27,7 @@ bool CrossPointState::loadFromFile() {
       bool result = JsonSettingsIO::loadState(*this, json.c_str());
       if (!result) {
         LOG_ERR("CPS", "Corrupted state.json, deleting to reset defaults");
-        Storage.deleteFile(STATE_FILE_JSON);
+        Storage.remove(STATE_FILE_JSON);
       }
       return result;
     }

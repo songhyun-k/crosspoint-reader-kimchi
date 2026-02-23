@@ -96,7 +96,7 @@ bool CrossPointSettings::loadFromFile() {
       }
       if (!result) {
         LOG_ERR("CPS", "Corrupted settings.json, deleting to reset defaults");
-        Storage.deleteFile(SETTINGS_FILE_JSON);
+        Storage.remove(SETTINGS_FILE_JSON);
       }
       return result;
     }

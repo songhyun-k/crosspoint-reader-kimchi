@@ -36,15 +36,15 @@ class SdFontFamily {
   bool load();
   bool isLoaded() const;
 
-  void getTextDimensions(const char* string, int* w, int* h, EpdFontStyle style = REGULAR) const;
-  bool hasPrintableChars(const char* string, EpdFontStyle style = REGULAR) const;
-  const EpdGlyph* getGlyph(uint32_t cp, EpdFontStyle style = REGULAR) const;
-  const uint8_t* getGlyphBitmap(uint32_t cp, EpdFontStyle style = REGULAR) const;
+  void getTextDimensions(const char* string, int* w, int* h, EpdFontStyle style = EpdFontFamily::REGULAR) const;
+  bool hasPrintableChars(const char* string, EpdFontStyle style = EpdFontFamily::REGULAR) const;
+  const EpdGlyph* getGlyph(uint32_t cp, EpdFontStyle style = EpdFontFamily::REGULAR) const;
+  const uint8_t* getGlyphBitmap(uint32_t cp, EpdFontStyle style = EpdFontFamily::REGULAR) const;
 
-  uint8_t getAdvanceY(EpdFontStyle style = REGULAR) const;
-  int8_t getAscender(EpdFontStyle style = REGULAR) const;
-  int8_t getDescender(EpdFontStyle style = REGULAR) const;
-  bool is2Bit(EpdFontStyle style = REGULAR) const;
+  uint8_t getAdvanceY(EpdFontStyle style = EpdFontFamily::REGULAR) const;
+  int8_t getAscender(EpdFontStyle style = EpdFontFamily::REGULAR) const;
+  int8_t getDescender(EpdFontStyle style = EpdFontFamily::REGULAR) const;
+  bool is2Bit(EpdFontStyle style = EpdFontFamily::REGULAR) const;
 
   bool hasBold() const { return bold != nullptr; }
 };

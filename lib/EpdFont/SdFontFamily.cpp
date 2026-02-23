@@ -92,13 +92,13 @@ bool SdFontFamily::load() {
 bool SdFontFamily::isLoaded() const { return regular && regular->isLoaded(); }
 
 SdFont* SdFontFamily::getFont(EpdFontStyle style) const {
-  if (style == BOLD && bold && bold->isLoaded()) {
+  if (style == EpdFontFamily::BOLD && bold && bold->isLoaded()) {
     return bold;
   }
-  if (style == ITALIC && italic && italic->isLoaded()) {
+  if (style == EpdFontFamily::ITALIC && italic && italic->isLoaded()) {
     return italic;
   }
-  if (style == BOLD_ITALIC) {
+  if (style == EpdFontFamily::BOLD_ITALIC) {
     if (boldItalic && boldItalic->isLoaded()) {
       return boldItalic;
     }
