@@ -23,7 +23,17 @@ void GfxRenderer::begin() {
   }
 }
 
-void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) { fontMap.insert({fontId, font}); }
+void GfxRenderer::insertFont(const int fontId, const EpdFontFamily& font) {
+  fontMap[fontId] = std::make_unique<UnifiedFontFamily>(&font, fontDecompressor);
+}
+
+void GfxRenderer::insertSdFont(const int fontId, SdFontFamily* font) {
+  fontMap[fontId] = std::make_unique<UnifiedFontFamily>(font);
+}
+
+bool GfxRenderer::removeFont(const int fontId) { return fontMap.erase(fontId) > 0; }
+
+bool GfxRenderer::hasFont(const int fontId) const { return fontMap.find(fontId) != fontMap.end(); }
 
 // Translate logical (x,y) coordinates to physical panel coordinates based on current orientation
 // This should always be inlined for better performance
@@ -65,7 +75,7 @@ enum class TextRotation { None, Rotated90CW };
 // Coordinate mapping and cursor advance direction are selected at compile time via the template parameter.
 template <TextRotation rotation>
 static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
-                           const EpdFontFamily& fontFamily, const uint32_t cp, int* cursorX, int* cursorY,
+                           const UnifiedFontFamily& fontFamily, const uint32_t cp, int* cursorX, int* cursorY,
                            const bool pixelState, const EpdFontFamily::Style style) {
   const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
   if (!glyph) {
@@ -77,22 +87,25 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     return;
   }
 
-  const EpdFontData* fontData = fontFamily.getData(style);
-  const bool is2Bit = fontData->is2Bit;
+  const bool is2Bit = fontFamily.is2Bit(style);
   const uint8_t width = glyph->width;
   const uint8_t height = glyph->height;
   const int left = glyph->left;
   const int top = glyph->top;
 
-  const uint8_t* bitmap = renderer.getGlyphBitmap(fontData, glyph);
+  const uint8_t* bitmap = fontFamily.getGlyphBitmap(cp, style);
+
+  // Synthetic bold: embolden by drawing each pixel twice (+1px horizontal shift)
+  const bool syntheticBold =
+      (style == EpdFontFamily::BOLD || style == EpdFontFamily::BOLD_ITALIC) && !fontFamily.hasBold();
 
   if (bitmap != nullptr) {
     // For Normal:  outer loop advances screenY, inner loop advances screenX
     // For Rotated: outer loop advances screenX, inner loop advances screenY (in reverse)
     int outerBase, innerBase;
     if constexpr (rotation == TextRotation::Rotated90CW) {
-      outerBase = *cursorX + fontData->ascender - top;  // screenX = outerBase + glyphY
-      innerBase = *cursorY - left;                      // screenY = innerBase - glyphX
+      outerBase = *cursorX + fontFamily.getAscender(style) - top;  // screenX = outerBase + glyphY
+      innerBase = *cursorY - left;                                 // screenY = innerBase - glyphX
     } else {
       outerBase = *cursorY - top;   // screenY = outerBase + glyphY
       innerBase = *cursorX + left;  // screenX = innerBase + glyphX
@@ -114,21 +127,17 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
 
           const uint8_t byte = bitmap[pixelPosition >> 2];
           const uint8_t bit_index = (3 - (pixelPosition & 3)) * 2;
-          // the direct bit from the font is 0 -> white, 1 -> light gray, 2 -> dark gray, 3 -> black
-          // we swap this to better match the way images and screen think about colors:
-          // 0 -> black, 1 -> dark grey, 2 -> light grey, 3 -> white
           const uint8_t bmpVal = 3 - ((byte >> bit_index) & 0x3);
 
           if (renderMode == GfxRenderer::BW && bmpVal < 3) {
-            // Black (also paints over the grays in BW mode)
             renderer.drawPixel(screenX, screenY, pixelState);
+            if (syntheticBold) renderer.drawPixel(screenX + 1, screenY, pixelState);
           } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
-            // Light gray (also mark the MSB if it's going to be a dark gray too)
-            // We have to flag pixels in reverse for the gray buffers, as 0 leave alone, 1 update
             renderer.drawPixel(screenX, screenY, false);
+            if (syntheticBold) renderer.drawPixel(screenX + 1, screenY, false);
           } else if (renderMode == GfxRenderer::GRAYSCALE_LSB && bmpVal == 1) {
-            // Dark gray
             renderer.drawPixel(screenX, screenY, false);
+            if (syntheticBold) renderer.drawPixel(screenX + 1, screenY, false);
           }
         }
       }
@@ -151,6 +160,7 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
 
           if ((byte >> bit_index) & 1) {
             renderer.drawPixel(screenX, screenY, pixelState);
+            if (syntheticBold) renderer.drawPixel(screenX + 1, screenY, pixelState);
           }
         }
       }
@@ -200,7 +210,7 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
   }
 
   int w = 0, h = 0;
-  fontIt->second.getTextDimensions(text, &w, &h, style);
+  fontIt->second->getTextDimensions(text, &w, &h, style);
   return w;
 }
 
@@ -230,7 +240,7 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     LOG_ERR("GFX", "Font %d not found", fontId);
     return;
   }
-  const auto& font = fontIt->second;
+  const auto& font = *fontIt->second;
   constexpr int MIN_COMBINING_GAP_PX = 1;
 
   uint32_t cp;
@@ -890,7 +900,7 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
     return 0;
   }
 
-  const EpdGlyph* spaceGlyph = fontIt->second.getGlyph(' ', style);
+  const EpdGlyph* spaceGlyph = fontIt->second->getGlyph(' ', style);
   return spaceGlyph ? spaceGlyph->advanceX : 0;
 }
 
@@ -903,7 +913,7 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, const EpdFo
 
   uint32_t cp;
   int width = 0;
-  const auto& font = fontIt->second;
+  const auto& font = *fontIt->second;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
     if (utf8IsCombiningMark(cp)) {
       continue;
@@ -922,7 +932,7 @@ int GfxRenderer::getFontAscenderSize(const int fontId) const {
     return 0;
   }
 
-  return fontIt->second.getData(EpdFontFamily::REGULAR)->ascender;
+  return fontIt->second->getAscender(EpdFontFamily::REGULAR);
 }
 
 int GfxRenderer::getLineHeight(const int fontId) const {
@@ -932,7 +942,7 @@ int GfxRenderer::getLineHeight(const int fontId) const {
     return 0;
   }
 
-  return fontIt->second.getData(EpdFontFamily::REGULAR)->advanceY;
+  return fontIt->second->getAdvanceY(EpdFontFamily::REGULAR);
 }
 
 int GfxRenderer::getTextHeight(const int fontId) const {
@@ -941,7 +951,7 @@ int GfxRenderer::getTextHeight(const int fontId) const {
     LOG_ERR("GFX", "Font %d not found", fontId);
     return 0;
   }
-  return fontIt->second.getData(EpdFontFamily::REGULAR)->ascender;
+  return fontIt->second->getAscender(EpdFontFamily::REGULAR);
 }
 
 void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y, const char* text, const bool black,
@@ -957,7 +967,7 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
     return;
   }
 
-  const auto& font = fontIt->second;
+  const auto& font = *fontIt->second;
 
   int xPos = x;
   int yPos = y;
@@ -1103,7 +1113,7 @@ void GfxRenderer::cleanupGrayscaleWithFrameBuffer() const {
   }
 }
 
-void GfxRenderer::renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
+void GfxRenderer::renderChar(const UnifiedFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
                              EpdFontFamily::Style style) const {
   renderCharImpl<TextRotation::None>(*this, renderMode, fontFamily, cp, x, y, pixelState, style);
 }
