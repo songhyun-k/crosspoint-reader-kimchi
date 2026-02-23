@@ -157,6 +157,7 @@ class CrossPointSettings {
   // E-ink refresh frequency (default 15 pages)
   uint8_t refreshFrequency = REFRESH_15;
   uint8_t hyphenationEnabled = 0;
+  uint8_t characterWrap = 0;
 
   // Reader screen margin settings
   uint8_t screenMargin = 5;
