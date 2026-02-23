@@ -6,33 +6,13 @@
 // Forward declaration for string arrays
 namespace i18n_strings {
 extern const char* const STRINGS_EN[];
-extern const char* const STRINGS_ES[];
-extern const char* const STRINGS_FR[];
-extern const char* const STRINGS_DE[];
-extern const char* const STRINGS_CZ[];
-extern const char* const STRINGS_PO[];
-extern const char* const STRINGS_RU[];
-extern const char* const STRINGS_SV[];
-extern const char* const STRINGS_RO[];
-extern const char* const STRINGS_CA[];
-extern const char* const STRINGS_UK[];
 extern const char* const STRINGS_KO[];
 }  // namespace i18n_strings
 
 // Language enum
 enum class Language : uint8_t {
   ENGLISH = 0,
-  SPANISH = 1,
-  FRENCH = 2,
-  GERMAN = 3,
-  CZECH = 4,
-  PORTUGUESE = 5,
-  RUSSIAN = 6,
-  SWEDISH = 7,
-  ROMANIAN = 8,
-  CATALAN = 9,
-  UKRAINIAN = 10,
-  KOREAN = 11,
+  KOREAN = 1,
   _COUNT
 };
 
@@ -373,26 +353,6 @@ inline const char* const* getStringArray(Language lang) {
   switch (lang) {
     case Language::ENGLISH:
       return i18n_strings::STRINGS_EN;
-    case Language::SPANISH:
-      return i18n_strings::STRINGS_ES;
-    case Language::FRENCH:
-      return i18n_strings::STRINGS_FR;
-    case Language::GERMAN:
-      return i18n_strings::STRINGS_DE;
-    case Language::CZECH:
-      return i18n_strings::STRINGS_CZ;
-    case Language::PORTUGUESE:
-      return i18n_strings::STRINGS_PO;
-    case Language::RUSSIAN:
-      return i18n_strings::STRINGS_RU;
-    case Language::SWEDISH:
-      return i18n_strings::STRINGS_SV;
-    case Language::ROMANIAN:
-      return i18n_strings::STRINGS_RO;
-    case Language::CATALAN:
-      return i18n_strings::STRINGS_CA;
-    case Language::UKRAINIAN:
-      return i18n_strings::STRINGS_UK;
     case Language::KOREAN:
       return i18n_strings::STRINGS_KO;
     default:
