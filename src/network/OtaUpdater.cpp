@@ -200,8 +200,46 @@ bool OtaUpdater::isUpdateNewer() const {
 
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
 
+bool OtaUpdater::isUpdateNewerFork() const {
+  if (!updateAvailable || latestVersion.empty() || latestVersion == CROSSPOINT_VERSION) {
+    return false;
+  }
+
+  // Parse version: major.minor.patch[-suffix.N]
+  // Supports formats like "1.1.0", "1.1.0-ko.3", "1.1.0-kimchi.1"
+  auto parseVersion = [](const std::string& version, int& major, int& minor, int& patch, int& suffix) {
+    major = minor = patch = suffix = 0;
+
+    // Find last hyphen for suffix (e.g. "-ko.3", "-kimchi.1")
+    std::string baseVersion = version;
+    size_t hyphenPos = version.rfind('-');
+    if (hyphenPos != std::string::npos) {
+      baseVersion = version.substr(0, hyphenPos);
+      // Find the dot after the suffix name
+      size_t dotPos = version.find('.', hyphenPos + 1);
+      if (dotPos != std::string::npos) {
+        suffix = atoi(version.c_str() + dotPos + 1);
+      }
+    }
+
+    // Parse major.minor.patch
+    sscanf(baseVersion.c_str(), "%d.%d.%d", &major, &minor, &patch);
+  };
+
+  int updateMajor, updateMinor, updatePatch, updateSuffix;
+  int currentMajor, currentMinor, currentPatch, currentSuffix;
+
+  parseVersion(latestVersion, updateMajor, updateMinor, updatePatch, updateSuffix);
+  parseVersion(CROSSPOINT_VERSION, currentMajor, currentMinor, currentPatch, currentSuffix);
+
+  if (updateMajor != currentMajor) return updateMajor > currentMajor;
+  if (updateMinor != currentMinor) return updateMinor > currentMinor;
+  if (updatePatch != currentPatch) return updatePatch > currentPatch;
+  return updateSuffix > currentSuffix;
+}
+
 OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate() {
-  if (!isUpdateNewer()) {
+  if (!isUpdateNewerFork()) {
     return UPDATE_OLDER_ERROR;
   }
 
