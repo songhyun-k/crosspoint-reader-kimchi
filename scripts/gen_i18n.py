@@ -123,6 +123,19 @@ def load_translations(
     if not yaml_files:
         raise FileNotFoundError(f"No .yaml files found in {translations_dir}")
 
+    # Filter languages via I18N_LANGUAGES environment variable (comma-separated stems).
+    # English is always included regardless of the filter.
+    lang_filter = os.environ.get("I18N_LANGUAGES", "").strip()
+    if lang_filter:
+        allowed = {s.strip().lower() for s in lang_filter.split(",")}
+        allowed.add("english")  # English is the reference, always required
+        yaml_files = [f for f in yaml_files if f.stem.lower() in allowed]
+        print(f"I18N_LANGUAGES filter active: {', '.join(sorted(allowed))}")
+        if not yaml_files:
+            raise FileNotFoundError(
+                f"No matching .yaml files for I18N_LANGUAGES={lang_filter}"
+            )
+
     # Parse every file
     parsed: Dict[str, Dict[str, str]] = {}
     for yf in yaml_files:
@@ -615,6 +628,14 @@ else:
     try:
         Import("env")
         print("Running i18n generation script from PlatformIO...")
+        # Forward custom_i18n_languages from platformio.ini to env var
+        # so load_translations() can pick it up.
+        try:
+            pio_langs = env.GetProjectOption("custom_i18n_languages", "")
+            if pio_langs and not os.environ.get("I18N_LANGUAGES"):
+                os.environ["I18N_LANGUAGES"] = pio_langs
+        except Exception:
+            pass
         main()
     except NameError:
         pass
