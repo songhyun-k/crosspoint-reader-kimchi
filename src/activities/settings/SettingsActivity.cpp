@@ -7,6 +7,7 @@
 #include "CalibreSettingsActivity.h"
 #include "ClearCacheActivity.h"
 #include "CrossPointSettings.h"
+#include "FontSelectionActivity.h"
 #include "KOReaderSettingsActivity.h"
 #include "LanguageSelectActivity.h"
 #include "MappedInputManager.h"
@@ -43,6 +44,7 @@ void SettingsActivity::onEnter() {
   }
 
   // Append device-only ACTION items
+  readerSettings.push_back(SettingInfo::Action(StrId::STR_FONT_SELECT, SettingAction::FontSelect));
   controlsSettings.insert(controlsSettings.begin(),
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
@@ -198,6 +200,9 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::Language:
         enterSubActivity(new LanguageSelectActivity(renderer, mappedInput, onComplete));
+        break;
+      case SettingAction::FontSelect:
+        enterSubActivity(new FontSelectionActivity(renderer, mappedInput, onComplete));
         break;
       case SettingAction::None:
         // Do nothing
