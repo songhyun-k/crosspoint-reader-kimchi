@@ -24,7 +24,12 @@ bool CrossPointState::loadFromFile() {
   if (Storage.exists(STATE_FILE_JSON)) {
     String json = Storage.readFile(STATE_FILE_JSON);
     if (!json.isEmpty()) {
-      return JsonSettingsIO::loadState(*this, json.c_str());
+      bool result = JsonSettingsIO::loadState(*this, json.c_str());
+      if (!result) {
+        LOG_ERR("CPS", "Corrupted state.json, deleting to reset defaults");
+        Storage.deleteFile(STATE_FILE_JSON);
+      }
+      return result;
     }
   }
 

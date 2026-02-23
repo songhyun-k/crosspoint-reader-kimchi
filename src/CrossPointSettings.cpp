@@ -94,6 +94,10 @@ bool CrossPointSettings::loadFromFile() {
           LOG_ERR("CPS", "Failed to resave settings after format update");
         }
       }
+      if (!result) {
+        LOG_ERR("CPS", "Corrupted settings.json, deleting to reset defaults");
+        Storage.deleteFile(SETTINGS_FILE_JSON);
+      }
       return result;
     }
   }
