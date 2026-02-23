@@ -8,7 +8,10 @@
 #include "esp_wifi.h"
 
 namespace {
-constexpr char latestReleaseUrl[] = "https://api.github.com/repos/crosspoint-reader/crosspoint-reader/releases/latest";
+#ifndef OTA_GITHUB_REPO
+#define OTA_GITHUB_REPO "crosspoint-reader/crosspoint-reader"
+#endif
+constexpr char latestReleaseUrl[] = "https://api.github.com/repos/" OTA_GITHUB_REPO "/releases/latest";
 
 /* This is buffer and size holder to keep upcoming data from latestReleaseUrl */
 char* local_buf;
