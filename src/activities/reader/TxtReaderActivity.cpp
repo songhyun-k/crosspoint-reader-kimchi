@@ -21,7 +21,7 @@ constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
 
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
-constexpr uint8_t CACHE_VERSION = 2;          // Increment when cache format changes
+constexpr uint8_t CACHE_VERSION = 3;          // v3: added characterWrap + lineCompression
 // Find UTF-8 character boundary at or before pos
 size_t findUtf8Boundary(const std::string& str, size_t pos) {
   if (pos >= str.length()) return str.length();
@@ -184,6 +184,8 @@ void TxtReaderActivity::initializeReader() {
   cachedFontId = SETTINGS.getReaderFontId();
   cachedScreenMargin = SETTINGS.screenMargin;
   cachedParagraphAlignment = SETTINGS.paragraphAlignment;
+  cachedCharacterWrap = SETTINGS.characterWrap;
+  cachedLineCompression = SETTINGS.getReaderLineCompression();
 
   // Calculate viewport dimensions
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
@@ -208,7 +210,7 @@ void TxtReaderActivity::initializeReader() {
 
   viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
   const int viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
-  const int lineHeight = renderer.getLineHeight(cachedFontId);
+  const int lineHeight = static_cast<int>(renderer.getLineHeight(cachedFontId) * cachedLineCompression);
 
   linesPerPage = viewportHeight / lineHeight;
   if (linesPerPage < 1) linesPerPage = 1;
@@ -426,7 +428,7 @@ void TxtReaderActivity::renderPage() {
   orientedMarginRight += cachedScreenMargin;
   orientedMarginBottom += statusBarMargin;
 
-  const int lineHeight = renderer.getLineHeight(cachedFontId);
+  const int lineHeight = static_cast<int>(renderer.getLineHeight(cachedFontId) * cachedLineCompression);
   const int contentWidth = viewportWidth;
 
   // Render text lines with alignment
@@ -689,6 +691,22 @@ bool TxtReaderActivity::loadPageIndexCache() {
     return false;
   }
 
+  uint8_t characterWrap;
+  serialization::readPod(f, characterWrap);
+  if (characterWrap != cachedCharacterWrap) {
+    LOG_DBG("TRS", "Cache character wrap mismatch, rebuilding");
+    f.close();
+    return false;
+  }
+
+  float lineCompression;
+  serialization::readPod(f, lineCompression);
+  if (lineCompression != cachedLineCompression) {
+    LOG_DBG("TRS", "Cache line compression mismatch, rebuilding");
+    f.close();
+    return false;
+  }
+
   uint32_t numPages;
   serialization::readPod(f, numPages);
 
@@ -725,6 +743,8 @@ void TxtReaderActivity::savePageIndexCache() const {
   serialization::writePod(f, static_cast<int32_t>(cachedFontId));
   serialization::writePod(f, static_cast<int32_t>(cachedScreenMargin));
   serialization::writePod(f, cachedParagraphAlignment);
+  serialization::writePod(f, cachedCharacterWrap);
+  serialization::writePod(f, cachedLineCompression);
   serialization::writePod(f, static_cast<uint32_t>(pageOffsets.size()));
 
   // Write page offsets

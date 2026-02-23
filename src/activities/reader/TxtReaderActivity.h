@@ -28,6 +28,8 @@ class TxtReaderActivity final : public ActivityWithSubactivity {
   int cachedFontId = 0;
   int cachedScreenMargin = 0;
   uint8_t cachedParagraphAlignment = CrossPointSettings::LEFT_ALIGN;
+  uint8_t cachedCharacterWrap = 0;
+  float cachedLineCompression = 1.0f;
 
   void renderPage();
   void renderStatusBar(int orientedMarginRight, int orientedMarginBottom, int orientedMarginLeft) const;
