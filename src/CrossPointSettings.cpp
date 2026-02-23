@@ -292,7 +292,18 @@ int CrossPointSettings::getRefreshFrequency() const {
   }
 }
 
+int CrossPointSettings::getCustomFontId() const {
+  uint32_t hash = 5381;
+  for (const char* p = customFontPath; *p; p++) {
+    hash = ((hash << 5) + hash) + static_cast<uint8_t>(*p);  // djb2 hash
+  }
+  return -static_cast<int>((hash & 0x7FFFFFFF) | 1);
+}
+
 int CrossPointSettings::getReaderFontId() const {
+  if (hasCustomFont()) {
+    return getCustomFontId();
+  }
   switch (fontFamily) {
     case BOOKERLY:
     default:

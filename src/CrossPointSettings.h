@@ -175,6 +175,8 @@ class CrossPointSettings {
   uint8_t fadingFix = 0;
   // Use book's embedded CSS styles for EPUB rendering (1 = enabled, 0 = disabled)
   uint8_t embeddedStyle = 1;
+  // Custom font path (SD card .epdfont file)
+  char customFontPath[64] = "";
 
   ~CrossPointSettings() = default;
 
@@ -185,6 +187,8 @@ class CrossPointSettings {
     return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : 400;
   }
   int getReaderFontId() const;
+  bool hasCustomFont() const { return customFontPath[0] != '\0'; }
+  int getCustomFontId() const;
 
   // If count_only is true, returns the number of settings items that would be written.
   uint8_t writeSettings(FsFile& file, bool count_only = false) const;
