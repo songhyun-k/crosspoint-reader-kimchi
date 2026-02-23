@@ -51,6 +51,26 @@ uint16_t measureWordWidth(const GfxRenderer& renderer, const int fontId, const s
   return renderer.getTextAdvanceX(fontId, sanitized.c_str(), style);
 }
 
+// Splits a UTF-8 string into individual characters (code points).
+std::vector<std::string> splitUtf8Chars(const std::string& str) {
+  std::vector<std::string> chars;
+  const char* p = str.c_str();
+  while (*p) {
+    int charLen = 1;
+    const unsigned char c = static_cast<unsigned char>(*p);
+    if ((c & 0xF8) == 0xF0) {
+      charLen = 4;
+    } else if ((c & 0xF0) == 0xE0) {
+      charLen = 3;
+    } else if ((c & 0xE0) == 0xC0) {
+      charLen = 2;
+    }
+    chars.emplace_back(p, charLen);
+    p += charLen;
+  }
+  return chars;
+}
+
 }  // namespace
 
 void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle, const bool underline,
