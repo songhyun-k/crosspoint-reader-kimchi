@@ -26,4 +26,10 @@ const EpdFontData* EpdFontFamily::getData(const Style style) const { return getF
 
 const EpdGlyph* EpdFontFamily::getGlyph(const uint32_t cp, const Style style) const {
   return getFont(style)->getGlyph(cp);
-};
+}
+
+bool EpdFontFamily::hasPrintableChars(const char* string, const Style style) const {
+  int w = 0, h = 0;
+  getTextDimensions(string, &w, &h, style);
+  return w > 0 || h > 0;
+}

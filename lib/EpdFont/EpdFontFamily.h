@@ -10,8 +10,11 @@ class EpdFontFamily {
       : regular(regular), bold(bold), italic(italic), boldItalic(boldItalic) {}
   ~EpdFontFamily() = default;
   void getTextDimensions(const char* string, int* w, int* h, Style style = REGULAR) const;
+  bool hasPrintableChars(const char* string, Style style = REGULAR) const;
   const EpdFontData* getData(Style style = REGULAR) const;
   const EpdGlyph* getGlyph(uint32_t cp, Style style = REGULAR) const;
+
+  bool hasBold() const { return bold != nullptr; }
 
  private:
   const EpdFont* regular;
@@ -21,3 +24,6 @@ class EpdFontFamily {
 
   const EpdFont* getFont(Style style) const;
 };
+
+// Global type alias for convenience
+using EpdFontStyle = EpdFontFamily::Style;
