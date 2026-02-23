@@ -2,6 +2,7 @@
 #include <Epub.h>
 #include <FontDecompressor.h>
 #include <GfxRenderer.h>
+#include <SdFontFamily.h>
 #include <HalDisplay.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
@@ -288,6 +289,69 @@ void setupDisplayAndFonts() {
   LOG_DBG("MAIN", "Fonts setup");
 }
 
+// Load a single SD font file into the renderer
+bool trySdFontLoad(GfxRenderer& gfxRenderer, int fontId, const char* name, const char* regularPath,
+                   const char* boldPath = nullptr) {
+  if (!Storage.exists(regularPath)) {
+    LOG_ERR("FNT", "%s not found: %s", name, regularPath);
+    return false;
+  }
+
+  auto* font = new SdFontFamily(regularPath, boldPath);
+  if (!font) {
+    LOG_ERR("FNT", "Failed to allocate memory for %s", name);
+    return false;
+  }
+
+  if (font->load()) {
+    gfxRenderer.insertSdFont(fontId, font);
+    LOG_INF("FNT", "Loaded %s from SD", name);
+    return true;
+  }
+
+  LOG_ERR("FNT", "Failed to load %s", name);
+  delete font;
+  return false;
+}
+
+// Load custom reader font from SD card if configured
+bool loadCustomReaderFont(GfxRenderer& gfxRenderer) {
+  if (!SETTINGS.hasCustomFont()) {
+    return false;
+  }
+
+  const char* fontPath = SETTINGS.customFontPath;
+  LOG_INF("FNT", "Loading custom font: %s", fontPath);
+
+  if (!Storage.exists(fontPath)) {
+    LOG_ERR("FNT", "Custom font file not found: %s", fontPath);
+    SETTINGS.customFontPath[0] = '\0';
+    SETTINGS.saveToFile();
+    return false;
+  }
+
+  const int fontId = SETTINGS.getCustomFontId();
+  if (trySdFontLoad(gfxRenderer, fontId, "CustomReaderFont", fontPath)) {
+    return true;
+  }
+
+  LOG_ERR("FNT", "Failed to load custom font, clearing setting");
+  SETTINGS.customFontPath[0] = '\0';
+  SETTINGS.saveToFile();
+  return false;
+}
+
+// Reload custom reader font — call when font settings change
+bool reloadCustomReaderFont() {
+  // Remove existing custom font if any
+  const int oldFontId = SETTINGS.getCustomFontId();
+  if (renderer.hasFont(oldFontId)) {
+    renderer.removeFont(oldFontId);
+  }
+  renderer.clearFontCache();
+  return loadCustomReaderFont(renderer);
+}
+
 void setup() {
   t1 = millis();
 
@@ -342,6 +406,7 @@ void setup() {
   LOG_DBG("MAIN", "Starting CrossPoint version " CROSSPOINT_VERSION);
 
   setupDisplayAndFonts();
+  loadCustomReaderFont(renderer);
 
   exitActivity();
   enterNewActivity(new BootActivity(renderer, mappedInputManager));
