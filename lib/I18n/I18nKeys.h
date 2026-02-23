@@ -359,6 +359,9 @@ enum class StrId : uint16_t {
   STR_OPDS_SERVER_URL,
   STR_SCREENSHOT_BUTTON,
   STR_CHARACTER_WRAP,
+  STR_FONT_SELECT,
+  STR_DEFAULT_FONT,
+  STR_APPLYING_FONT,
   // Sentinel - must be last
   _COUNT
 };
