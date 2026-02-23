@@ -24,7 +24,7 @@ class UITheme {
   static UIIcon getFileIcon(std::string filename);
 
  private:
-  const ThemeMetrics* currentMetrics;
+  const ThemeMetrics* currentMetrics = nullptr;
   std::unique_ptr<BaseTheme> currentTheme;
 };
 
