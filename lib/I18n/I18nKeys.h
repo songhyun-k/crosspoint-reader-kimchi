@@ -358,6 +358,7 @@ enum class StrId : uint16_t {
   STR_EMBEDDED_STYLE,
   STR_OPDS_SERVER_URL,
   STR_SCREENSHOT_BUTTON,
+  STR_CHARACTER_WRAP,
   // Sentinel - must be last
   _COUNT
 };
