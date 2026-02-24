@@ -66,6 +66,9 @@ void EpubReaderActivity::onEnter() {
     return;
   }
 
+  // Cache current font ID for change detection
+  cachedFontId = SETTINGS.getReaderFontId();
+
   // Configure screen orientation based on settings
   // NOTE: This affects layout math and must be applied before any render calls.
   applyReaderOrientation(renderer, SETTINGS.orientation);
@@ -500,13 +503,30 @@ void EpubReaderActivity::render(Activity::RenderLock&& lock) {
     return;
   }
 
+  // Detect font change and invalidate section cache
+  const int currentFontId = SETTINGS.getReaderFontId();
+  if (cachedFontId != 0 && cachedFontId != currentFontId) {
+    LOG_DBG("ERS", "Font changed from %d to %d, invalidating section", cachedFontId, currentFontId);
+    if (section) {
+      cachedSpineIndex = currentSpineIndex;
+      cachedChapterTotalPageCount = section->pageCount;
+      nextPageNumber = section->currentPage;
+    }
+    section.reset();
+  }
+  cachedFontId = currentFontId;
+
   // edge case handling for sub-zero spine index
   if (currentSpineIndex < 0) {
     currentSpineIndex = 0;
   }
-  // based bounds of book, show end of book screen
+  // corrupted progress data (spine index beyond book bounds) - reset to start
   if (currentSpineIndex > epub->getSpineItemsCount()) {
-    currentSpineIndex = epub->getSpineItemsCount();
+    LOG_ERR("ERS", "Spine index %d out of range (max %d), resetting to start", currentSpineIndex,
+            epub->getSpineItemsCount());
+    currentSpineIndex = 0;
+    nextPageNumber = 0;
+    section.reset();
   }
 
   // Show end of book screen
@@ -547,17 +567,17 @@ void EpubReaderActivity::render(Activity::RenderLock&& lock) {
     const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
 
     if (!section->loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
-                                  SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
-                                  viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                  SETTINGS.characterWrap)) {
+                                  SETTINGS.extraParagraphSpacing, SETTINGS.paragraphIndent,
+                                  SETTINGS.paragraphAlignment, SETTINGS.characterWrap, viewportWidth, viewportHeight,
+                                  SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle)) {
       LOG_DBG("ERS", "Cache not found, building...");
 
       const auto popupFn = [this]() { GUI.drawPopup(renderer, tr(STR_INDEXING)); };
 
       if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
-                                      SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
-                                      viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, popupFn,
-                                      SETTINGS.characterWrap)) {
+                                      SETTINGS.extraParagraphSpacing, SETTINGS.paragraphIndent,
+                                      SETTINGS.paragraphAlignment, SETTINGS.characterWrap, viewportWidth,
+                                      viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, popupFn)) {
         LOG_ERR("ERS", "Failed to persist page data to SD");
         section.reset();
         return;
@@ -605,11 +625,9 @@ void EpubReaderActivity::render(Activity::RenderLock&& lock) {
   }
 
   if (section->currentPage < 0 || section->currentPage >= section->pageCount) {
-    LOG_DBG("ERS", "Page out of bounds: %d (max %d)", section->currentPage, section->pageCount);
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_OUT_OF_BOUNDS), true, EpdFontFamily::BOLD);
-    renderStatusBar(orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
-    renderer.displayBuffer();
-    return;
+    // Clamp to last page instead of showing an error after layout changes.
+    LOG_DBG("ERS", "Page out of bounds: %d (max %d), clamping to last page", section->currentPage, section->pageCount);
+    section->currentPage = section->pageCount - 1;
   }
 
   {

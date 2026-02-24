@@ -40,6 +40,7 @@ class ChapterHtmlSlimParser {
   int fontId;
   float lineCompression;
   bool extraParagraphSpacing;
+  bool paragraphIndent;
   uint8_t paragraphAlignment;
   uint16_t viewportWidth;
   uint16_t viewportHeight;
@@ -80,12 +81,13 @@ class ChapterHtmlSlimParser {
  public:
   explicit ChapterHtmlSlimParser(std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer,
                                  const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                                 const uint8_t paragraphAlignment, const uint16_t viewportWidth,
-                                 const uint16_t viewportHeight, const bool hyphenationEnabled,
+                                 const bool paragraphIndent, const uint8_t paragraphAlignment, const bool characterWrap,
+                                 const uint16_t viewportWidth, const uint16_t viewportHeight,
+                                 const bool hyphenationEnabled,
                                  const std::function<void(std::unique_ptr<Page>)>& completePageFn,
                                  const bool embeddedStyle, const std::string& contentBase,
                                  const std::string& imageBasePath, const std::function<void()>& popupFn = nullptr,
-                                 const CssParser* cssParser = nullptr, const bool characterWrap = false)
+                                 const CssParser* cssParser = nullptr)
 
       : epub(epub),
         filepath(filepath),
@@ -93,11 +95,12 @@ class ChapterHtmlSlimParser {
         fontId(fontId),
         lineCompression(lineCompression),
         extraParagraphSpacing(extraParagraphSpacing),
+        paragraphIndent(paragraphIndent),
         paragraphAlignment(paragraphAlignment),
+        characterWrap(characterWrap),
         viewportWidth(viewportWidth),
         viewportHeight(viewportHeight),
         hyphenationEnabled(hyphenationEnabled),
-        characterWrap(characterWrap),
         completePageFn(completePageFn),
         popupFn(popupFn),
         cssParser(cssParser),

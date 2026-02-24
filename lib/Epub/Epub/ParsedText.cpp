@@ -469,16 +469,17 @@ void ParsedText::layoutCharacterWrap(const GfxRenderer& renderer, const int font
 }
 
 void ParsedText::applyParagraphIndent() {
-  if (extraParagraphSpacing || words.empty()) {
+  if (!paragraphIndent || paragraphIndentApplied || words.empty()) {
     return;
   }
+  paragraphIndentApplied = true;
 
   if (blockStyle.textIndentDefined) {
-    // CSS text-indent is explicitly set (even if 0) - don't use fallback EmSpace
+    // CSS text-indent is explicitly set (even if 0) - don't use fallback indent
     // The actual indent positioning is handled in extractLine()
   } else if (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left) {
-    // No CSS text-indent defined - use EmSpace fallback for visual indent
-    words.front().insert(0, "\xe2\x80\x83");
+    // No CSS text-indent defined - use ideographic space (U+3000)
+    words.front().insert(0, "\xe3\x80\x80");
   }
 }
 

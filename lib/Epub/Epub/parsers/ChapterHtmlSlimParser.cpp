@@ -120,7 +120,8 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
 
     makePages();
   }
-  currentTextBlock.reset(new ParsedText(extraParagraphSpacing, hyphenationEnabled, blockStyle, characterWrap));
+  currentTextBlock.reset(new ParsedText(extraParagraphSpacing, paragraphIndent, characterWrap, hyphenationEnabled,
+                                        blockStyle));
 }
 
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
