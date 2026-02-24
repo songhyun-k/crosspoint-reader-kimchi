@@ -33,3 +33,11 @@ bool EpdFontFamily::hasPrintableChars(const char* string, const Style style) con
   getTextDimensions(string, &w, &h, style);
   return w > 0 || h > 0;
 }
+
+int8_t EpdFontFamily::getKerning(const uint32_t leftCp, const uint32_t rightCp, const Style style) const {
+  return getFont(style)->getKerning(leftCp, rightCp);
+}
+
+uint32_t EpdFontFamily::applyLigatures(const uint32_t cp, const char*& text, const Style style) const {
+  return getFont(style)->applyLigatures(cp, text);
+}
