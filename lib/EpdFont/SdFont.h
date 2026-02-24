@@ -17,7 +17,7 @@
 class GlyphBitmapCache {
  public:
   struct CacheEntry {
-    uint32_t codepoint;
+    uint64_t key;
     uint8_t* bitmap;
     uint32_t size;
   };
@@ -26,16 +26,16 @@ class GlyphBitmapCache {
   size_t maxCacheSize;
   size_t currentSize;
   std::list<CacheEntry> cacheList;  // Most recent at front
-  std::unordered_map<uint32_t, std::list<CacheEntry>::iterator> cacheMap;
+  std::unordered_map<uint64_t, std::list<CacheEntry>::iterator> cacheMap;
 
   void evictOldest();
 
  public:
-  explicit GlyphBitmapCache(size_t maxSize = 16384);  // 16KB default (conserve memory)
+  explicit GlyphBitmapCache(size_t maxSize = 32768);  // 32KB default
   ~GlyphBitmapCache();
 
-  const uint8_t* get(uint32_t codepoint);
-  const uint8_t* put(uint32_t codepoint, const uint8_t* data, uint32_t size);
+  const uint8_t* get(uint64_t key);
+  const uint8_t* put(uint64_t key, const uint8_t* data, uint32_t size);
 
   void clear();
   size_t getUsedSize() const { return currentSize; }
@@ -48,7 +48,7 @@ class GlyphBitmapCache {
  */
 class GlyphMetadataCache {
  public:
-  static constexpr size_t MAX_ENTRIES = 64;
+  static constexpr size_t MAX_ENTRIES = 128;
 
   struct CacheEntry {
     uint32_t codepoint;
@@ -91,6 +91,8 @@ class SdFontData {
   // Bitmap cache (shared across all SdFontData instances)
   static GlyphBitmapCache* sharedCache;
   static int cacheRefCount;
+  static uint8_t nextFontTag;
+  uint8_t fontTag;
 
   // File handle for reading (opened on demand)
   mutable FsFile fontFile;
@@ -125,6 +127,7 @@ class SdFontData {
   static void setCacheSize(size_t maxBytes);
   static void clearCache();
   static size_t getCacheUsedSize();
+  static uint64_t makeCacheKey(uint8_t tag, uint32_t cp) { return (static_cast<uint64_t>(tag) << 32) | cp; }
 };
 
 /**

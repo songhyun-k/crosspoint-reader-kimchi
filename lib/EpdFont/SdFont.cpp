@@ -21,14 +21,14 @@ void GlyphBitmapCache::evictOldest() {
   while (currentSize > maxCacheSize && !cacheList.empty()) {
     auto& oldest = cacheList.back();
     currentSize -= oldest.size;
-    cacheMap.erase(oldest.codepoint);
+    cacheMap.erase(oldest.key);
     free(oldest.bitmap);
     cacheList.pop_back();
   }
 }
 
-const uint8_t* GlyphBitmapCache::get(uint32_t codepoint) {
-  auto it = cacheMap.find(codepoint);
+const uint8_t* GlyphBitmapCache::get(uint64_t key) {
+  auto it = cacheMap.find(key);
   if (it == cacheMap.end()) {
     return nullptr;
   }
@@ -41,8 +41,8 @@ const uint8_t* GlyphBitmapCache::get(uint32_t codepoint) {
   return it->second->bitmap;
 }
 
-const uint8_t* GlyphBitmapCache::put(uint32_t codepoint, const uint8_t* data, uint32_t size) {
-  auto it = cacheMap.find(codepoint);
+const uint8_t* GlyphBitmapCache::put(uint64_t key, const uint8_t* data, uint32_t size) {
+  auto it = cacheMap.find(key);
   if (it != cacheMap.end()) {
     if (it->second != cacheList.begin()) {
       cacheList.splice(cacheList.begin(), cacheList, it->second);
@@ -57,9 +57,9 @@ const uint8_t* GlyphBitmapCache::put(uint32_t codepoint, const uint8_t* data, ui
   }
   memcpy(bitmapCopy, data, size);
 
-  CacheEntry entry = {codepoint, bitmapCopy, size};
+  CacheEntry entry = {key, bitmapCopy, size};
   cacheList.push_front(entry);
-  cacheMap[codepoint] = cacheList.begin();
+  cacheMap[key] = cacheList.begin();
   currentSize += size;
 
   evictOldest();
@@ -118,6 +118,7 @@ void GlyphMetadataCache::clear() {
 
 GlyphBitmapCache* SdFontData::sharedCache = nullptr;
 int SdFontData::cacheRefCount = 0;
+uint8_t SdFontData::nextFontTag = 0;
 
 static constexpr uint32_t MAX_INTERVAL_COUNT = 10000;
 static constexpr uint32_t MAX_GLYPH_COUNT = 150000;
@@ -125,9 +126,10 @@ static constexpr size_t MIN_FREE_HEAP_AFTER_LOAD = 16384;
 
 SdFontData::SdFontData(const char* path) : filePath(path), loaded(false), intervals(nullptr) {
   memset(&header, 0, sizeof(header));
+  fontTag = nextFontTag++;
 
   if (sharedCache == nullptr) {
-    sharedCache = new GlyphBitmapCache(16384);  // 16KB cache
+    sharedCache = new GlyphBitmapCache(32768);  // 32KB cache
   }
   cacheRefCount++;
 }
@@ -148,6 +150,7 @@ SdFontData::~SdFontData() {
 
 SdFontData::SdFontData(SdFontData&& other) noexcept
     : filePath(std::move(other.filePath)), loaded(other.loaded), header(other.header), intervals(other.intervals) {
+  fontTag = other.fontTag;
   other.intervals = nullptr;
   other.loaded = false;
   cacheRefCount++;
@@ -164,6 +167,7 @@ SdFontData& SdFontData::operator=(SdFontData&& other) noexcept {
     loaded = other.loaded;
     header = other.header;
     intervals = other.intervals;
+    fontTag = other.fontTag;
 
     other.intervals = nullptr;
     other.loaded = false;
@@ -352,49 +356,39 @@ const uint8_t* SdFontData::getGlyphBitmap(uint32_t codepoint) const {
     return nullptr;
   }
 
-  const uint8_t* cached = sharedCache->get(codepoint);
+  // Check bitmap cache first (fast path)
+  const uint64_t key = makeCacheKey(fontTag, codepoint);
+  const uint8_t* cached = sharedCache->get(key);
   if (cached != nullptr) {
     return cached;
   }
 
-  int glyphIndex = findGlyphIndex(codepoint);
-  if (glyphIndex < 0 || glyphIndex >= static_cast<int>(header.glyphCount)) {
+  // Get glyph metadata (hits glyphCache or single SD read)
+  const EpdGlyph* glyph = getGlyph(codepoint);
+  if (!glyph || glyph->dataLength == 0) {
     return nullptr;
   }
 
+  // Read only bitmap data from SD (metadata re-read eliminated)
   if (!ensureFileOpen()) {
     return nullptr;
   }
 
-  uint32_t glyphFileOffset = header.glyphsOffset + (glyphIndex * sizeof(EpdFontGlyph));
-  if (!fontFile.seekSet(glyphFileOffset)) {
+  if (!fontFile.seekSet(header.bitmapOffset + glyph->dataOffset)) {
     return nullptr;
   }
 
-  EpdFontGlyph fileGlyph;
-  if (fontFile.read(&fileGlyph, sizeof(EpdFontGlyph)) != sizeof(EpdFontGlyph)) {
-    return nullptr;
-  }
-
-  if (fileGlyph.dataLength == 0) {
-    return nullptr;
-  }
-
-  if (!fontFile.seekSet(header.bitmapOffset + fileGlyph.dataOffset)) {
-    return nullptr;
-  }
-
-  uint8_t* tempBuffer = static_cast<uint8_t*>(malloc(fileGlyph.dataLength));
+  uint8_t* tempBuffer = static_cast<uint8_t*>(malloc(glyph->dataLength));
   if (!tempBuffer) {
     return nullptr;
   }
 
-  if (fontFile.read(tempBuffer, fileGlyph.dataLength) != static_cast<int>(fileGlyph.dataLength)) {
+  if (fontFile.read(tempBuffer, glyph->dataLength) != static_cast<int>(glyph->dataLength)) {
     free(tempBuffer);
     return nullptr;
   }
 
-  const uint8_t* result = sharedCache->put(codepoint, tempBuffer, fileGlyph.dataLength);
+  const uint8_t* result = sharedCache->put(key, tempBuffer, glyph->dataLength);
   free(tempBuffer);
 
   return result;
@@ -426,7 +420,7 @@ size_t SdFontData::getCacheUsedSize() {
 
 SdFont::SdFont(SdFontData* fontData, bool takeOwnership) : data(fontData), ownsData(takeOwnership) {}
 
-SdFont::SdFont(const char* filePath) : data(new SdFontData(filePath)), ownsData(true) {}
+SdFont::SdFont(const char* filePath) : data(new (std::nothrow) SdFontData(filePath)), ownsData(true) {}
 
 SdFont::~SdFont() {
   if (ownsData) {
