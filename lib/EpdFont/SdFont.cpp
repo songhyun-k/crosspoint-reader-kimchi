@@ -260,8 +260,7 @@ bool SdFontData::load() {
   fontFile.close();
 
   loaded = true;
-  LOG_INF("SDF", "Loaded: %s (advanceY=%u, intervals=%uKB)", filePath.c_str(), header.advanceY,
-          intervalsMemory / 1024);
+  LOG_INF("SDF", "Loaded: %s (advanceY=%u, intervals=%uKB)", filePath.c_str(), header.advanceY, intervalsMemory / 1024);
 
   return true;
 }

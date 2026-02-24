@@ -11,9 +11,9 @@
 
 namespace {
 constexpr uint8_t SECTION_FILE_VERSION = 20;
-constexpr uint32_t HEADER_SIZE =
-    sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(bool) +
-    sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) + sizeof(uint16_t) + sizeof(uint32_t);
+constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(bool) +
+                                 sizeof(uint8_t) + sizeof(bool) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) +
+                                 sizeof(bool) + sizeof(uint16_t) + sizeof(uint32_t);
 }  // namespace
 
 uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
@@ -64,10 +64,9 @@ void Section::writeSectionFileHeader(const int fontId, const float lineCompressi
 }
 
 bool Section::loadSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                              const bool paragraphIndent, const uint8_t paragraphAlignment,
-                              const bool characterWrap, const uint16_t viewportWidth,
-                              const uint16_t viewportHeight, const bool hyphenationEnabled,
-                              const bool embeddedStyle) {
+                              const bool paragraphIndent, const uint8_t paragraphAlignment, const bool characterWrap,
+                              const uint16_t viewportWidth, const uint16_t viewportHeight,
+                              const bool hyphenationEnabled, const bool embeddedStyle) {
   if (!Storage.openFileForRead("SCT", filePath, file)) {
     return false;
   }
@@ -138,10 +137,10 @@ bool Section::clearCache() const {
 }
 
 bool Section::createSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                                const bool paragraphIndent, const uint8_t paragraphAlignment,
-                                const bool characterWrap, const uint16_t viewportWidth,
-                                const uint16_t viewportHeight, const bool hyphenationEnabled,
-                                const bool embeddedStyle, const std::function<void()>& popupFn) {
+                                const bool paragraphIndent, const uint8_t paragraphAlignment, const bool characterWrap,
+                                const uint16_t viewportWidth, const uint16_t viewportHeight,
+                                const bool hyphenationEnabled, const bool embeddedStyle,
+                                const std::function<void()>& popupFn) {
   const auto localPath = epub->getSpineItem(spineIndex).href;
   const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_" + std::to_string(spineIndex) + ".html";
 
@@ -210,8 +209,8 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   }
 
   ChapterHtmlSlimParser visitor(
-      epub, tmpHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, paragraphIndent,
-      paragraphAlignment, characterWrap, viewportWidth, viewportHeight, hyphenationEnabled,
+      epub, tmpHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, paragraphIndent, paragraphAlignment,
+      characterWrap, viewportWidth, viewportHeight, hyphenationEnabled,
       [this, &lut](std::unique_ptr<Page> page) { lut.emplace_back(this->onPageComplete(std::move(page))); },
       embeddedStyle, contentBase, imageBasePath, popupFn, cssParser);
   Hyphenator::setPreferredLanguage(epub->getLanguage());

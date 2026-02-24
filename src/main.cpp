@@ -2,7 +2,6 @@
 #include <Epub.h>
 #include <FontDecompressor.h>
 #include <GfxRenderer.h>
-#include <SdFontFamily.h>
 #include <HalDisplay.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
@@ -10,6 +9,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <SPI.h>
+#include <SdFontFamily.h>
 #include <builtinFonts/all.h>
 
 #include <cstring>

@@ -21,8 +21,8 @@ class FontSelectionActivity final : public ActivityWithSubactivity {
 
  private:
   int selectedIndex = 0;
-  std::vector<std::string> fontFiles;   // Full paths (empty string = default font)
-  std::vector<std::string> fontNames;   // Display names
+  std::vector<std::string> fontFiles;  // Full paths (empty string = default font)
+  std::vector<std::string> fontNames;  // Display names
   const std::function<void()> onBack;
 
   void loadFontList();

@@ -18,8 +18,7 @@ class SdFontFamily {
   SdFont* getFont(EpdFontStyle style) const;
 
  public:
-  explicit SdFontFamily(SdFont* regular, SdFont* bold = nullptr, SdFont* italic = nullptr,
-                        SdFont* boldItalic = nullptr)
+  explicit SdFontFamily(SdFont* regular, SdFont* bold = nullptr, SdFont* italic = nullptr, SdFont* boldItalic = nullptr)
       : regular(regular), bold(bold), italic(italic), boldItalic(boldItalic), ownsPointers(false) {}
 
   explicit SdFontFamily(const char* regularPath, const char* boldPath = nullptr, const char* italicPath = nullptr,

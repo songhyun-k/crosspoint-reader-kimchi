@@ -15,9 +15,9 @@ class UnifiedFontFamily {
 
  private:
   Type type;
-  const EpdFontFamily* flashFont;       // Non-owning pointer for flash fonts
-  FontDecompressor* fontDecompressor;    // Non-owning pointer for flash font decompression
-  SdFontFamily* sdFont;                 // Owned pointer for SD fonts
+  const EpdFontFamily* flashFont;      // Non-owning pointer for flash fonts
+  FontDecompressor* fontDecompressor;  // Non-owning pointer for flash font decompression
+  SdFontFamily* sdFont;                // Owned pointer for SD fonts
 
  public:
   // Construct from flash font with its decompressor
