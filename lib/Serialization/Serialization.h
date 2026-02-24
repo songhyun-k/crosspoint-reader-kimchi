@@ -36,17 +36,31 @@ static void writeString(FsFile& file, const std::string& s) {
   file.write(reinterpret_cast<const uint8_t*>(s.data()), len);
 }
 
-static void readString(std::istream& is, std::string& s) {
+static bool readString(std::istream& is, std::string& s, uint32_t maxLen = 4096) {
   uint32_t len;
   readPod(is, len);
+  if (len > maxLen) {
+    s.clear();
+    return false;
+  }
   s.resize(len);
-  is.read(&s[0], len);
+  if (len > 0) {
+    is.read(&s[0], len);
+  }
+  return true;
 }
 
-static void readString(FsFile& file, std::string& s) {
+static bool readString(FsFile& file, std::string& s, uint32_t maxLen = 4096) {
   uint32_t len;
   readPod(file, len);
+  if (len > maxLen) {
+    s.clear();
+    return false;
+  }
   s.resize(len);
-  file.read(&s[0], len);
+  if (len > 0) {
+    file.read(&s[0], len);
+  }
+  return true;
 }
 }  // namespace serialization
