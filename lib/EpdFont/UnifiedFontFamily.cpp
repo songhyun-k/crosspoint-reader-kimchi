@@ -63,6 +63,20 @@ const EpdGlyph* UnifiedFontFamily::getGlyph(uint32_t cp, EpdFontStyle style) con
   return nullptr;
 }
 
+int8_t UnifiedFontFamily::getKerning(uint32_t leftCp, uint32_t rightCp, EpdFontStyle style) const {
+  if (type == Type::FLASH && flashFont) {
+    return flashFont->getKerning(leftCp, rightCp, style);
+  }
+  return 0;
+}
+
+uint32_t UnifiedFontFamily::applyLigatures(uint32_t cp, const char*& text, EpdFontStyle style) const {
+  if (type == Type::FLASH && flashFont) {
+    return flashFont->applyLigatures(cp, text, style);
+  }
+  return cp;
+}
+
 const uint8_t* UnifiedFontFamily::getGlyphBitmap(uint32_t cp, EpdFontStyle style) const {
   if (type == Type::FLASH && flashFont) {
     const EpdFontData* data = flashFont->getData(style);

@@ -898,7 +898,7 @@ int GfxRenderer::getSpaceKernAdjust(const int fontId, const uint32_t leftCp, con
                                     const EpdFontFamily::Style style) const {
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) return 0;
-  const auto& font = fontIt->second;
+  const auto& font = *fontIt->second;
   return font.getKerning(leftCp, ' ', style) + font.getKerning(' ', rightCp, style);
 }
 
@@ -906,7 +906,7 @@ int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint3
                             const EpdFontFamily::Style style) const {
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) return 0;
-  return fontIt->second.getKerning(leftCp, rightCp, style);
+  return fontIt->second->getKerning(leftCp, rightCp, style);
 }
 
 int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFamily::Style style) const {

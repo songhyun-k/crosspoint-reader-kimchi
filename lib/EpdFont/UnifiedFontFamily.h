@@ -41,6 +41,8 @@ class UnifiedFontFamily {
   void getTextDimensions(const char* string, int* w, int* h, EpdFontStyle style = EpdFontFamily::REGULAR) const;
   bool hasPrintableChars(const char* string, EpdFontStyle style = EpdFontFamily::REGULAR) const;
   const EpdGlyph* getGlyph(uint32_t cp, EpdFontStyle style = EpdFontFamily::REGULAR) const;
+  int8_t getKerning(uint32_t leftCp, uint32_t rightCp, EpdFontStyle style = EpdFontFamily::REGULAR) const;
+  uint32_t applyLigatures(uint32_t cp, const char*& text, EpdFontStyle style = EpdFontFamily::REGULAR) const;
 
   // Get glyph bitmap (handles decompression for flash, SD cache for SD)
   const uint8_t* getGlyphBitmap(uint32_t cp, EpdFontStyle style = EpdFontFamily::REGULAR) const;
