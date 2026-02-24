@@ -405,11 +405,19 @@ def generate_keys_header(
 
     # Language enum
     lines.append("// Language enum")
-    lines.append("enum class Language : uint8_t {")
-    for i, lang in enumerate(languages):
-        lines.append(f"  {lang} = {i},")
-    lines.append("  _COUNT")
-    lines.append("};")
+    # Keep compact output for small language sets (matches clang-format output
+    # in our default english+korean build), while preserving readability when
+    # many languages are included.
+    if len(languages) <= 3:
+        enum_items = [f"{lang} = {i}" for i, lang in enumerate(languages)]
+        enum_items.append("_COUNT")
+        lines.append(f"enum class Language : uint8_t {{ {', '.join(enum_items)} }};")
+    else:
+        lines.append("enum class Language : uint8_t {")
+        for i, lang in enumerate(languages):
+            lines.append(f"  {lang} = {i},")
+        lines.append("  _COUNT")
+        lines.append("};")
     lines.append("")
 
     # Extern declarations
