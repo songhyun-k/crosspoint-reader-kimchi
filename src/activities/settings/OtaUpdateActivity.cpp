@@ -38,7 +38,7 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
     return;
   }
 
-  if (!updater.isUpdateNewerFork()) {
+  if (!updater.isUpdateNewerKimchi()) {
     LOG_DBG("OTA", "No new update available");
     {
       RenderLock lock(*this);

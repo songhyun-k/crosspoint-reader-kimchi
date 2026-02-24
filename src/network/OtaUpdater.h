@@ -33,7 +33,7 @@ class OtaUpdater {
 
   OtaUpdater() = default;
   bool isUpdateNewer() const;
-  bool isUpdateNewerFork() const;
+  bool isUpdateNewerKimchi() const;
   const std::string& getLatestVersion() const;
   OtaUpdaterError checkForUpdate();
   OtaUpdaterError installUpdate();

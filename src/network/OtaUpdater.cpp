@@ -3,6 +3,9 @@
 #include <ArduinoJson.h>
 #include <Logging.h>
 
+#include <cctype>
+#include <cstring>
+
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
 #include "esp_wifi.h"
@@ -61,10 +64,73 @@ esp_err_t event_handler(esp_http_client_event_t* event) {
 
   return ESP_OK;
 } /* event_handler */
+
+struct ParsedKimchiVersion {
+  int major = 0;
+  int minor = 0;
+  int patch = 0;
+  int kimchi = 0;
+  bool preRelease = false;
+};
+
+// Parse "major.minor.patch-kimchi.N" for release tags.
+// For the current firmware version, we also allow local suffixes like "-dev", "-rc+hash", "-slim".
+bool parseKimchiVersion(const std::string& version, const bool requireKimchiSuffix, ParsedKimchiVersion& out) {
+  const char* cursor = version.c_str();
+  if (*cursor == 'v' || *cursor == 'V') {
+    cursor++;
+  }
+
+  char suffix[64] = {0};
+  int matched = sscanf(cursor, "%d.%d.%d%63s", &out.major, &out.minor, &out.patch, suffix);
+  if (matched < 3) {
+    return false;
+  }
+
+  if (matched == 3 || suffix[0] == '\0') {
+    return !requireKimchiSuffix;
+  }
+
+  if (strncmp(suffix, "-kimchi.", 8) == 0) {
+    const char* p = suffix + 8;
+    if (!std::isdigit(static_cast<unsigned char>(*p))) {
+      return false;
+    }
+
+    int kimchi = 0;
+    while (std::isdigit(static_cast<unsigned char>(*p))) {
+      kimchi = kimchi * 10 + (*p - '0');
+      p++;
+    }
+    out.kimchi = kimchi;
+
+    if (*p == '\0') {
+      return true;
+    }
+
+    // Accept kimchi pre-release/build metadata suffixes.
+    if (*p == '-' || *p == '+') {
+      out.preRelease = true;
+      return true;
+    }
+
+    return false;
+  }
+
+  if (requireKimchiSuffix) {
+    return false;
+  }
+
+  if (strncmp(suffix, "-rc", 3) == 0 || strncmp(suffix, "-dev", 4) == 0 || strncmp(suffix, "-slim", 5) == 0) {
+    out.preRelease = true;
+    return true;
+  }
+
+  return false;
+}
 } /* namespace */
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
-  JsonDocument filter;
   esp_err_t esp_err;
   JsonDocument doc;
 
@@ -117,11 +183,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
     return INTERNAL_UPDATE_ERROR;
   }
 
-  filter["tag_name"] = true;
-  filter["assets"][0]["name"] = true;
-  filter["assets"][0]["browser_download_url"] = true;
-  filter["assets"][0]["size"] = true;
-  const DeserializationError error = deserializeJson(doc, local_buf, DeserializationOption::Filter(filter));
+  const DeserializationError error = deserializeJson(doc, local_buf);
   if (error) {
     LOG_ERR("OTA", "JSON parse failed: %s", error.c_str());
     return JSON_PARSE_ERROR;
@@ -203,46 +265,36 @@ bool OtaUpdater::isUpdateNewer() const {
 
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
 
-bool OtaUpdater::isUpdateNewerFork() const {
+bool OtaUpdater::isUpdateNewerKimchi() const {
   if (!updateAvailable || latestVersion.empty() || latestVersion == CROSSPOINT_VERSION) {
     return false;
   }
 
-  // Parse version: major.minor.patch[-suffix.N]
-  // Supports formats like "1.1.0", "1.1.0-ko.3", "1.1.0-kimchi.1"
-  auto parseVersion = [](const std::string& version, int& major, int& minor, int& patch, int& suffix) {
-    major = minor = patch = suffix = 0;
+  ParsedKimchiVersion latest;
+  ParsedKimchiVersion current;
+  if (!parseKimchiVersion(latestVersion, true, latest)) {
+    LOG_DBG("OTA", "Latest tag is not a kimchi channel release: %s", latestVersion.c_str());
+    return false;
+  }
+  if (!parseKimchiVersion(CROSSPOINT_VERSION, false, current)) {
+    LOG_ERR("OTA", "Current firmware version is not parseable: %s", CROSSPOINT_VERSION);
+    return false;
+  }
 
-    // Find last hyphen for suffix (e.g. "-ko.3", "-kimchi.1")
-    std::string baseVersion = version;
-    size_t hyphenPos = version.rfind('-');
-    if (hyphenPos != std::string::npos) {
-      baseVersion = version.substr(0, hyphenPos);
-      // Find the dot after the suffix name
-      size_t dotPos = version.find('.', hyphenPos + 1);
-      if (dotPos != std::string::npos) {
-        suffix = atoi(version.c_str() + dotPos + 1);
-      }
-    }
+  if (latest.major != current.major) return latest.major > current.major;
+  if (latest.minor != current.minor) return latest.minor > current.minor;
+  if (latest.patch != current.patch) return latest.patch > current.patch;
+  if (latest.kimchi != current.kimchi) return latest.kimchi > current.kimchi;
 
-    // Parse major.minor.patch
-    sscanf(baseVersion.c_str(), "%d.%d.%d", &major, &minor, &patch);
-  };
-
-  int updateMajor, updateMinor, updatePatch, updateSuffix;
-  int currentMajor, currentMinor, currentPatch, currentSuffix;
-
-  parseVersion(latestVersion, updateMajor, updateMinor, updatePatch, updateSuffix);
-  parseVersion(CROSSPOINT_VERSION, currentMajor, currentMinor, currentPatch, currentSuffix);
-
-  if (updateMajor != currentMajor) return updateMajor > currentMajor;
-  if (updateMinor != currentMinor) return updateMinor > currentMinor;
-  if (updatePatch != currentPatch) return updatePatch > currentPatch;
-  return updateSuffix > currentSuffix;
+  // Same kimchi release number: allow stable release to replace local pre-release builds.
+  if (current.preRelease) {
+    return true;
+  }
+  return false;
 }
 
 OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate() {
-  if (!isUpdateNewerFork()) {
+  if (!isUpdateNewerKimchi()) {
     return UPDATE_OLDER_ERROR;
   }
 
