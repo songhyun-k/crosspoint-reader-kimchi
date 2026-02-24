@@ -195,6 +195,9 @@ void FontSelectionActivity::loop() {
 void FontSelectionActivity::handleSelection() {
   xSemaphoreTake(renderingMutex, portMAX_DELAY);
 
+  // Capture old font ID before changing settings (needed for proper cleanup)
+  const int oldFontId = SETTINGS.hasCustomFont() ? SETTINGS.getCustomFontId() : 0;
+
   // Show loading screen
   renderer.clearScreen();
   renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2 - 10, tr(STR_APPLYING_FONT));
@@ -212,7 +215,7 @@ void FontSelectionActivity::handleSelection() {
   LOG_INF("FNT", "Font selected: %s", selectedIndex == 0 ? "default" : SETTINGS.customFontPath);
 
   // Reload custom font dynamically (no reboot needed)
-  reloadCustomReaderFont();
+  reloadCustomReaderFont(oldFontId);
 
   // Invalidate EPUB/TXT caches since font changed
   invalidateReaderCaches();

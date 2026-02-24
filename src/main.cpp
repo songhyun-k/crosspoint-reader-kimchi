@@ -365,10 +365,8 @@ bool loadCustomReaderFont(GfxRenderer& gfxRenderer) {
 }
 
 // Reload custom reader font — call when font settings change
-bool reloadCustomReaderFont() {
-  // Remove existing custom font if any
-  const int oldFontId = SETTINGS.getCustomFontId();
-  if (renderer.hasFont(oldFontId)) {
+bool reloadCustomReaderFont(int oldFontId) {
+  if (oldFontId != 0 && renderer.hasFont(oldFontId)) {
     renderer.removeFont(oldFontId);
   }
   renderer.clearFontCache();
