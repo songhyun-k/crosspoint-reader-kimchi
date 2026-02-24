@@ -10,11 +10,7 @@ extern const char* const STRINGS_KO[];
 }  // namespace i18n_strings
 
 // Language enum
-enum class Language : uint8_t {
-  ENGLISH = 0,
-  KOREAN = 1,
-  _COUNT
-};
+enum class Language : uint8_t { ENGLISH = 0, KOREAN = 1, _COUNT };
 
 // Language display names (defined in I18nStrings.cpp)
 extern const char* const LANGUAGE_NAMES[];
