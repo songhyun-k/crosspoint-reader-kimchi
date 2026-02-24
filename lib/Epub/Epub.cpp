@@ -1,5 +1,6 @@
 #include "Epub.h"
 
+#include <Bitmap.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
@@ -525,9 +526,29 @@ std::string Epub::getCoverBmpPath(bool cropped) const {
 }
 
 bool Epub::generateCoverBmp(bool cropped) const {
-  // Already generated, return true
-  if (Storage.exists(getCoverBmpPath(cropped).c_str())) {
-    return true;
+  const auto bmpPath = getCoverBmpPath(cropped);
+
+  // Reuse cached cover only if it's a valid, non-truncated BMP.
+  if (Storage.exists(bmpPath.c_str())) {
+    FsFile existingBmp;
+    if (Storage.openFileForRead("EBP", bmpPath, existingBmp)) {
+      const auto fileSize = existingBmp.size();
+      if (fileSize >= 74) {
+        Bitmap bmpCheck(existingBmp);
+        if (bmpCheck.parseHeaders() == BmpReaderError::Ok) {
+          const uint32_t expectedSize = static_cast<uint32_t>(bmpCheck.getRowBytes()) * bmpCheck.getHeight() + 70;
+          if (fileSize >= expectedSize) {
+            existingBmp.close();
+            return true;
+          }
+          LOG_DBG("EBP", "Cached cover BMP truncated (%lu < %lu bytes), regenerating", fileSize, expectedSize);
+        }
+      } else {
+        LOG_DBG("EBP", "Cached cover BMP too small (%lu bytes), regenerating", fileSize);
+      }
+      existingBmp.close();
+      Storage.remove(bmpPath.c_str());
+    }
   }
 
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
@@ -550,7 +571,12 @@ bool Epub::generateCoverBmp(bool cropped) const {
     if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
       return false;
     }
-    readItemContentsToStream(coverImageHref, coverJpg, 1024);
+    if (!readItemContentsToStream(coverImageHref, coverJpg, 1024)) {
+      LOG_ERR("EBP", "Failed to extract cover image from epub");
+      coverJpg.close();
+      Storage.remove(coverJpgTempPath.c_str());
+      return false;
+    }
     coverJpg.close();
 
     if (!Storage.openFileForRead("EBP", coverJpgTempPath, coverJpg)) {
@@ -558,7 +584,7 @@ bool Epub::generateCoverBmp(bool cropped) const {
     }
 
     FsFile coverBmp;
-    if (!Storage.openFileForWrite("EBP", getCoverBmpPath(cropped), coverBmp)) {
+    if (!Storage.openFileForWrite("EBP", bmpPath, coverBmp)) {
       coverJpg.close();
       return false;
     }
@@ -583,7 +609,12 @@ bool Epub::generateCoverBmp(bool cropped) const {
     if (!Storage.openFileForWrite("EBP", coverPngTempPath, coverPng)) {
       return false;
     }
-    readItemContentsToStream(coverImageHref, coverPng, 1024);
+    if (!readItemContentsToStream(coverImageHref, coverPng, 1024)) {
+      LOG_ERR("EBP", "Failed to extract cover image from epub");
+      coverPng.close();
+      Storage.remove(coverPngTempPath.c_str());
+      return false;
+    }
     coverPng.close();
 
     if (!Storage.openFileForRead("EBP", coverPngTempPath, coverPng)) {
