@@ -389,6 +389,23 @@ void TxtReaderActivity::render(Activity::RenderLock&&) {
     return;
   }
 
+  // Reinitialize if reader settings changed since last layout.
+  if (initialized) {
+    const int currentFontId = SETTINGS.getReaderFontId();
+    const int currentMargin = SETTINGS.screenMargin;
+    const uint8_t currentAlignment = SETTINGS.paragraphAlignment;
+    const uint8_t currentCharacterWrap = SETTINGS.characterWrap;
+    const float currentLineCompression = SETTINGS.getReaderLineCompression();
+
+    if (currentFontId != cachedFontId || currentMargin != cachedScreenMargin ||
+        currentAlignment != cachedParagraphAlignment || currentCharacterWrap != cachedCharacterWrap ||
+        currentLineCompression != cachedLineCompression) {
+      LOG_DBG("TRS", "Settings changed, reinitializing (font: %d->%d)", cachedFontId, currentFontId);
+      initialized = false;
+      pageOffsets.clear();
+    }
+  }
+
   // Initialize reader if not done
   if (!initialized) {
     initializeReader();
