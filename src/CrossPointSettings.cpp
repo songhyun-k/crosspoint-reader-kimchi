@@ -22,7 +22,7 @@ void readAndValidate(FsFile& file, uint8_t& member, const uint8_t maxValue) {
 }
 
 namespace {
-constexpr uint8_t SETTINGS_FILE_VERSION = 1;
+constexpr uint8_t SETTINGS_FILE_VERSION = 6;  // Binary format version for migration
 constexpr char SETTINGS_FILE_BIN[] = "/.crosspoint/settings.bin";
 constexpr char SETTINGS_FILE_JSON[] = "/.crosspoint/settings.json";
 constexpr char SETTINGS_FILE_BAK[] = "/.crosspoint/settings.bin.bak";
@@ -125,16 +125,33 @@ bool CrossPointSettings::loadFromBinaryFile() {
     return false;
   }
 
+  // Sanity check file size before reading.
+  const uint32_t fileSize = inputFile.size();
+  if (fileSize < 2 || fileSize > 4096) {
+    LOG_ERR("CPS", "Settings file corrupted (size=%u), deleting", fileSize);
+    inputFile.close();
+    Storage.remove(SETTINGS_FILE_BIN);
+    return false;
+  }
+
   uint8_t version;
   serialization::readPod(inputFile, version);
-  if (version != SETTINGS_FILE_VERSION) {
+  if (version < 1 || version > SETTINGS_FILE_VERSION) {
     LOG_ERR("CPS", "Deserialization failed: Unknown version %u", version);
     inputFile.close();
+    Storage.remove(SETTINGS_FILE_BIN);
     return false;
   }
 
   uint8_t fileSettingsCount = 0;
   serialization::readPod(inputFile, fileSettingsCount);
+
+  if (fileSettingsCount > 50) {
+    LOG_ERR("CPS", "Settings count invalid (%u), deleting settings file", fileSettingsCount);
+    inputFile.close();
+    Storage.remove(SETTINGS_FILE_BIN);
+    return false;
+  }
 
   uint8_t settingsRead = 0;
   bool frontButtonMappingRead = false;
@@ -153,12 +170,25 @@ bool CrossPointSettings::loadFromBinaryFile() {
     if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, sideButtonLayout, SIDE_BUTTON_LAYOUT_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, fontFamily, FONT_FAMILY_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, fontSize, FONT_SIZE_COUNT);
-    if (++settingsRead >= fileSettingsCount) break;
+
+    // Version 1 stored fontFamily/fontSize; newer formats removed them.
+    if (version == 1) {
+      readAndValidate(inputFile, fontFamily, FONT_FAMILY_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+      readAndValidate(inputFile, fontSize, FONT_SIZE_COUNT);
+      if (++settingsRead >= fileSettingsCount) break;
+    }
+
     readAndValidate(inputFile, lineSpacing, LINE_COMPRESSION_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
+
+    // Version 2 had a systemFontFamily entry which is not used anymore.
+    if (version == 2) {
+      uint8_t dummy;
+      serialization::readPod(inputFile, dummy);
+      if (++settingsRead >= fileSettingsCount) break;
+    }
+
     readAndValidate(inputFile, paragraphAlignment, PARAGRAPH_ALIGNMENT_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, sleepTimeout, SLEEP_TIMEOUT_COUNT);
@@ -182,6 +212,27 @@ bool CrossPointSettings::loadFromBinaryFile() {
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPod(inputFile, longPressChapterSkip);
     if (++settingsRead >= fileSettingsCount) break;
+
+    // Version 4+: custom font path
+    if (version >= 4) {
+      std::string fontPathStr;
+      serialization::readString(inputFile, fontPathStr);
+      strncpy(customFontPath, fontPathStr.c_str(), sizeof(customFontPath) - 1);
+      customFontPath[sizeof(customFontPath) - 1] = '\0';
+      if (++settingsRead >= fileSettingsCount) break;
+    }
+    // Version 5+: character wrap
+    if (version >= 5) {
+      serialization::readPod(inputFile, characterWrap);
+      if (++settingsRead >= fileSettingsCount) break;
+    }
+    // Version 6+: paragraph indent (ignored until kimchi exposes it)
+    if (version >= 6) {
+      uint8_t paragraphIndentUnused;
+      serialization::readPod(inputFile, paragraphIndentUnused);
+      if (++settingsRead >= fileSettingsCount) break;
+    }
+
     serialization::readPod(inputFile, hyphenationEnabled);
     if (++settingsRead >= fileSettingsCount) break;
     {
