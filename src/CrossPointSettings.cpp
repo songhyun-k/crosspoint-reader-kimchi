@@ -226,10 +226,9 @@ bool CrossPointSettings::loadFromBinaryFile() {
       serialization::readPod(inputFile, characterWrap);
       if (++settingsRead >= fileSettingsCount) break;
     }
-    // Version 6+: paragraph indent (ignored until kimchi exposes it)
+    // Version 6+: paragraph indent
     if (version >= 6) {
-      uint8_t paragraphIndentUnused;
-      serialization::readPod(inputFile, paragraphIndentUnused);
+      serialization::readPod(inputFile, paragraphIndent);
       if (++settingsRead >= fileSettingsCount) break;
     }
 

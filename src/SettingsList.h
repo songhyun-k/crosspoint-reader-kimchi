@@ -69,6 +69,8 @@ inline std::vector<SettingInfo> getSettingsList() {
                         "orientation", StrId::STR_CAT_READER),
       SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing, "extraParagraphSpacing",
                           StrId::STR_CAT_READER),
+      SettingInfo::Toggle(StrId::STR_PARAGRAPH_INDENT, &CrossPointSettings::paragraphIndent, "paragraphIndent",
+                          StrId::STR_CAT_READER),
       SettingInfo::Toggle(StrId::STR_TEXT_AA, &CrossPointSettings::textAntiAliasing, "textAntiAliasing",
                           StrId::STR_CAT_READER),
 
