@@ -2,6 +2,8 @@
 
 #include <Logging.h>
 
+#include <new>
+
 // ============================================================================
 // SdFontFamily Implementation
 // ============================================================================
@@ -10,16 +12,16 @@ SdFontFamily::SdFontFamily(const char* regularPath, const char* boldPath, const 
                            const char* boldItalicPath)
     : regular(nullptr), bold(nullptr), italic(nullptr), boldItalic(nullptr), ownsPointers(true) {
   if (regularPath) {
-    regular = new SdFont(regularPath);
+    regular = new (std::nothrow) SdFont(regularPath);
   }
   if (boldPath) {
-    bold = new SdFont(boldPath);
+    bold = new (std::nothrow) SdFont(boldPath);
   }
   if (italicPath) {
-    italic = new SdFont(italicPath);
+    italic = new (std::nothrow) SdFont(italicPath);
   }
   if (boldItalicPath) {
-    boldItalic = new SdFont(boldItalicPath);
+    boldItalic = new (std::nothrow) SdFont(boldItalicPath);
   }
 }
 

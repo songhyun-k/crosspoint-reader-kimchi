@@ -13,6 +13,7 @@
 #include <builtinFonts/all.h>
 
 #include <cstring>
+#include <new>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -319,7 +320,7 @@ bool trySdFontLoad(GfxRenderer& gfxRenderer, int fontId, const char* name, const
     return false;
   }
 
-  auto* font = new SdFontFamily(regularPath, boldPath);
+  auto* font = new (std::nothrow) SdFontFamily(regularPath, boldPath);
   if (!font) {
     LOG_ERR("FNT", "Failed to allocate memory for %s", name);
     return false;
