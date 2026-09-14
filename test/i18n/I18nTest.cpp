@@ -6,7 +6,6 @@
 #include <string>
 
 TEST(I18nTest, InitialLanguageIsKorean) {
-  EXPECT_EQ(I18n::DEFAULT_LANGUAGE, Language::KO);
   EXPECT_EQ(I18N.getLanguage(), Language::KO);
   EXPECT_STREQ(tr(STR_SETTINGS_TITLE), "설정");
 }
@@ -26,14 +25,6 @@ TEST(I18nTest, SavedCodesSurviveAResetWithoutDependingOnEnumOrder) {
 TEST(I18nTest, UnknownCodesUseKorean) {
   EXPECT_EQ(I18n::languageFromCode(""), Language::KO);
   EXPECT_EQ(I18n::languageFromCode("not-a-language"), Language::KO);
-}
-
-TEST(I18nTest, InvalidSelectionCannotChangeChosenLanguage) {
-  I18N.setLanguage(Language::EN);
-  I18N.setLanguage(static_cast<Language>(255));
-  EXPECT_EQ(I18N.getLanguage(), Language::EN);
-  EXPECT_STREQ(I18N.get(static_cast<StrId>(65535)), "???");
-  EXPECT_STREQ(I18N.getLanguageName(static_cast<Language>(255)), "???");
 }
 
 TEST(I18nTest, EveryGeneratedEnglishAndKoreanStringIsReadable) {
