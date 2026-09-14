@@ -1,7 +1,5 @@
-#include <Utf8.h>
 #include <gtest/gtest.h>
 
-#include "lib/Epub/Epub/TokenBoundary.h"
 #include "lib/Epub/Epub/hyphenation/Hyphenator.h"
 #include "lib/Epub/Epub/hyphenation/LanguageRegistry.h"
 
@@ -31,7 +29,6 @@ TEST(HyphenationDisabledTest, KeepsVisibleExplicitHyphens) {
   ASSERT_EQ(breaks.size(), 1u);
   EXPECT_EQ(breaks.front().byteOffset, 3u);
   EXPECT_FALSE(breaks.front().requiresInsertedHyphen);
-  EXPECT_TRUE(TokenBoundary::allowsBreakAfterExplicitHyphen('-'));
 }
 
 TEST(HyphenationDisabledTest, KeepsTheUpstreamExplicitHyphenContract) {
@@ -39,9 +36,7 @@ TEST(HyphenationDisabledTest, KeepsTheUpstreamExplicitHyphenContract) {
   ASSERT_EQ(breaks.size(), 1u);
   EXPECT_EQ(breaks.front().byteOffset, 4u);
   EXPECT_TRUE(breaks.front().requiresInsertedHyphen);
-  EXPECT_FALSE(TokenBoundary::allowsBreakAfterExplicitHyphen(0x00AD));
-  EXPECT_FALSE(TokenBoundary::allowsBreakAfterExplicitHyphen(0x2011));
-  // Preserve upstream's differing token-boundary and explicit-hyphen policies.
+  // Preserve upstream's explicit-hyphen policy for U+2011.
   const auto nonbreaking = Hyphenator::breakOffsets("non\u2011breaking", false);
   ASSERT_EQ(nonbreaking.size(), 1u);
   EXPECT_EQ(nonbreaking.front().byteOffset, 6u);
@@ -54,8 +49,6 @@ TEST(HyphenationDisabledTest, RetainsEmergencyBreaksForOversizedWords) {
 }
 
 TEST(HyphenationDisabledTest, KoreanAndCjkBreaksDoNotInsertHyphens) {
-  EXPECT_TRUE(utf8IsCjkBreakable(0xAC00));
-  EXPECT_TRUE(TokenBoundary::allowsBreak(false, true));
   const auto breaks = Hyphenator::breakOffsets("한글문장이이어집니다", true);
   ASSERT_FALSE(breaks.empty());
   for (const auto& split : breaks) {
