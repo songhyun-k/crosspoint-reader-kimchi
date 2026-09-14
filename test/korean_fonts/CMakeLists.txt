@@ -1,5 +1,8 @@
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 file(GLOB UZLIB_SOURCES "${REPO_ROOT}/lib/uzlib/src/*.c")
+# CMake 3.16's GENERATED property is directory-scoped. This translation unit
+# is generated in the sibling i18n target, including on a completely fresh build.
+set_source_files_properties(${CMAKE_BINARY_DIR}/i18n/generated/I18nStrings.cpp PROPERTIES GENERATED TRUE)
 add_executable(KoreanFontsTest
   KoreanFontsTest.cpp
   ${REPO_ROOT}/src/ReaderFontSizes.cpp
