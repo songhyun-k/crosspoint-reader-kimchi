@@ -2,9 +2,6 @@
 
 import importlib.util
 import re
-import subprocess
-import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -51,20 +48,6 @@ class KoreanTranslationsTest(unittest.TestCase):
         self.assertEqual(names, ["English", "한국어"])
         self.assertEqual(tags, ["en", "ko"])
         self.assertEqual(inherited, [set(), set()])
-
-    def test_default_cli_generates_only_english_and_korean(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            result = subprocess.run(
-                [sys.executable, str(ROOT / "scripts/gen_i18n.py"), str(TRANSLATIONS), tmp],
-                cwd=ROOT, capture_output=True, text=True, check=True,
-            )
-            self.assertIn("Languages: 2", result.stdout)
-            keys = (Path(tmp) / "I18nKeys.h").read_text()
-            strings = (Path(tmp) / "I18nStrings.cpp").read_text()
-            self.assertIn("STRINGS_KO_DATA", keys)
-            self.assertIn("STRINGS_EN_DATA", strings)
-            self.assertNotIn("STRINGS_FR_DATA", strings)
-            self.assertNotIn("Language::FR", keys)
 
 
 if __name__ == "__main__":

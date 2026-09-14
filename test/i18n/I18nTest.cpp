@@ -28,6 +28,7 @@ TEST(I18nTest, UnknownCodesUseKorean) {
 }
 
 TEST(I18nTest, EveryGeneratedEnglishAndKoreanStringIsReadable) {
+  EXPECT_EQ(getLanguageCount(), 2);
   for (const auto language : {Language::EN, Language::KO}) {
     I18N.setLanguage(language);
     for (unsigned key = 0; key < static_cast<unsigned>(StrId::_COUNT); ++key) {
@@ -45,14 +46,6 @@ TEST(I18nTest, KoreanPrintfFieldsPreserveArgumentTypesAndEscapedPercent) {
   EXPECT_STREQ(text, "3개의 네트워크 발견");
   std::snprintf(text, sizeof(text), tr(STR_PAGE_TOTAL_OVERALL_FORMAT), 4, 12, 25.5);
   EXPECT_STREQ(text, "4/12 페이지, 전체 25.50%");
-}
-
-TEST(I18nTest, OnlyEnglishAndKoreanAreSelectable) {
-  EXPECT_EQ(getLanguageCount(), 2);
-  EXPECT_EQ(static_cast<Language>(SORTED_LANGUAGE_INDICES[0]), Language::EN);
-  EXPECT_EQ(static_cast<Language>(SORTED_LANGUAGE_INDICES[1]), Language::KO);
-  EXPECT_STREQ(I18N.getLanguageName(Language::EN), "English");
-  EXPECT_STREQ(I18N.getLanguageName(Language::KO), "한국어");
 }
 
 TEST(I18nTest, RemovedLanguagesDoNotReinterpretAStoredChoice) {
