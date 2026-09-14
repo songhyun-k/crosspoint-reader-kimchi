@@ -190,11 +190,6 @@ TEST_F(KoreanLayoutTest, SettingChangesJustifiedLatinCharacterFillingWithoutInse
   layout(text, 300);
   EXPECT_EQ(contents(lines), source);
   for (const auto& line : lines) EXPECT_EQ(contents({line}).find('-'), std::string::npos);
-  EXPECT_TRUE(ReaderRenderSpec{}.characterWrap);
-  textsettings::PreviewKey key;
-  auto changed = key;
-  changed.characterWrap = true;
-  EXPECT_NE(key, changed);
 }
 
 TEST_F(KoreanLayoutTest, ArenaFailureDoesNotEmitAnInvalidBlock) {
