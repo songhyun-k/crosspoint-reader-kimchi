@@ -22,8 +22,6 @@ class ReleaseJsonParser {
 
   bool foundTag() const;
   bool foundFirmware() const;
-  bool isComplete() const;
-  bool isPublishedRelease() const { return !draft && !prerelease; }
   const char* getTagName() const;
   const char* getFirmwareUrl() const;
   size_t getFirmwareSize() const;
@@ -38,8 +36,6 @@ class ReleaseJsonParser {
   enum class LastKey : uint8_t {
     NONE,
     TAG_NAME,
-    DRAFT,
-    PRERELEASE,
     ASSETS,
     ASSET_NAME,
     ASSET_URL,
@@ -65,14 +61,11 @@ class ReleaseJsonParser {
   uint8_t depth;
   uint8_t assetDepth;
 
-  char tagName[64];
+  char tagName[32];
   char firmwareUrl[512];
   size_t firmwareSize;
   bool tagFound;
   bool firmwareFound;
-  bool rootComplete;
-  bool draft;
-  bool prerelease;
 
   char currentAssetName[32];
   char currentAssetUrl[512];

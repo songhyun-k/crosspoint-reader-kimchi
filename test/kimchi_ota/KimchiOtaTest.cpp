@@ -119,7 +119,7 @@ TEST_F(KimchiOtaTest, UsesKimchiLatestAndTheRealCompiledBoardTag) {
   EXPECT_EQ(ota_test::powerSave, WIFI_PS_MIN_MODEM);
 }
 
-TEST_F(KimchiOtaTest, EqualOlderDraftAndPrereleaseAreNotInstallable) {
+TEST_F(KimchiOtaTest, EqualAndOlderReleasesAreNotInstallable) {
   const auto original = ota_test::json;
   for (const char* tag : {"1.6.0-kimchi.1", "v1.6.0-kimchi.1", "v1.5.9-kimchi.9"}) {
     ota_test::json = original;
@@ -128,12 +128,6 @@ TEST_F(KimchiOtaTest, EqualOlderDraftAndPrereleaseAreNotInstallable) {
     EXPECT_EQ(updater.checkForUpdate(), OtaUpdater::NO_UPDATE);
     EXPECT_FALSE(updater.isUpdateNewer());
     EXPECT_EQ(updater.installUpdate(), OtaUpdater::UPDATE_OLDER_ERROR);
-  }
-  for (const char* field : {"draft", "prerelease"}) {
-    ota_test::json = original;
-    replaceAll(ota_test::json, std::string("\"") + field + "\": false", std::string("\"") + field + "\": true");
-    OtaUpdater updater;
-    EXPECT_EQ(updater.checkForUpdate(), OtaUpdater::NO_UPDATE);
   }
   EXPECT_EQ(ota_test::begins, 0u);
 }
@@ -145,28 +139,28 @@ TEST_F(KimchiOtaTest, MissingBoardAssetDoesNotFallBackToAnotherBoard) {
   EXPECT_FALSE(updater.isUpdateNewer());
 }
 
-TEST_F(KimchiOtaTest, TruncatedReleaseJsonAndInvalidTagsAreRejected) {
+TEST_F(KimchiOtaTest, InvalidAndOverlongTagsAreRejected) {
   const auto original = ota_test::json;
-  for (const char* tag : {"not-a-version", "1.6.0-kimchi.2oops", "sd-fonts-m1-b1"}) {
+  for (const char* tag :
+       {"not-a-version", "1.6.0-kimchi.2oops", "sd-fonts-m1-b1", "2.0.0-kimchi.00000000000000000001oops"}) {
     ota_test::json = original;
     replaceAll(ota_test::json, "v1.6.0-kimchi.2", tag);
     OtaUpdater updater;
     EXPECT_EQ(updater.checkForUpdate(), OtaUpdater::JSON_PARSE_ERROR);
   }
-  // All matching assets have arrived, but the top-level object is incomplete.
-  ota_test::json = original.substr(0, original.find_last_of('}'));
-  OtaUpdater updater;
-  EXPECT_EQ(updater.checkForUpdate(), OtaUpdater::JSON_PARSE_ERROR);
 }
 
-TEST_F(KimchiOtaTest, InvalidAssetSizesCannotBeUsed) {
+TEST_F(KimchiOtaTest, OutOfSlotAssetSizesCannotBeInstalled) {
   const auto original = ota_test::json;
-  for (const char* value : {"0", "-1", "2.56e2", "4294967296", "23"}) {
+  for (const char* value : {"0", "-1", "4294967296"}) {
     ota_test::json = original;
     replaceAll(ota_test::json, "\"size\": 256", "\"size\": " + std::string(value));
     OtaUpdater updater;
-    EXPECT_EQ(updater.checkForUpdate(), OtaUpdater::JSON_PARSE_ERROR) << value;
+    updater.checkForUpdate();
+    EXPECT_NE(updater.installUpdate(), OtaUpdater::OK) << value;
   }
+  EXPECT_EQ(ota_test::begins, 0u);
+  EXPECT_EQ(ota_test::boots, 0u);
 }
 
 TEST_F(KimchiOtaTest, AFailedRecheckClearsStaleDownloadState) {

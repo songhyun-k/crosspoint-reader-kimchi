@@ -27,7 +27,6 @@ class StreamingJsonParser {
   void feed(const char* data, size_t len);
 
   bool hasError() const { return error; }
-  bool isComplete() const { return !error && state == State::SCANNING && nestingDepth == 0; }
 
  private:
   enum class State : uint8_t {

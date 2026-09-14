@@ -60,15 +60,14 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
           releaseParser.foundFirmware() ? "yes" : "no");
 
   kimchi_release::Version candidate, installed;
-  if (!releaseParser.isComplete() || !releaseParser.foundTag() ||
-      !kimchi_release::parseVersion(releaseParser.getTagName(), candidate) ||
+  if (!releaseParser.foundTag() || !kimchi_release::parseVersion(releaseParser.getTagName(), candidate) ||
       !kimchi_release::parseVersion(CROSSPOINT_RELEASE_VERSION, installed)) {
-    LOG_ERR("OTA", "Incomplete release JSON or invalid kimchi tag");
+    LOG_ERR("OTA", "Missing or invalid kimchi tag");
     return JSON_PARSE_ERROR;
   }
 
   latestVersion = releaseParser.getTagName();
-  if (!releaseParser.isPublishedRelease() || candidate.numbers <= installed.numbers) return NO_UPDATE;
+  if (candidate.numbers <= installed.numbers) return NO_UPDATE;
 
   if (!releaseParser.foundFirmware()) {
     LOG_INF("OTA", "No %s asset in latest release", assetName);

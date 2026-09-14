@@ -2,7 +2,6 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <limits>
 
 namespace {
 
@@ -36,9 +35,6 @@ void ReleaseJsonParser::reset() {
   firmwareSize = 0;
   tagFound = false;
   firmwareFound = false;
-  rootComplete = false;
-  draft = false;
-  prerelease = false;
   currentAssetName[0] = '\0';
   currentAssetUrl[0] = '\0';
   currentAssetSize = 0;
@@ -48,15 +44,12 @@ void ReleaseJsonParser::feed(const char* data, size_t len) { parser.feed(data, l
 
 bool ReleaseJsonParser::foundTag() const { return tagFound; }
 bool ReleaseJsonParser::foundFirmware() const { return firmwareFound; }
-bool ReleaseJsonParser::isComplete() const {
-  return rootComplete && position == Position::TOP_LEVEL && depth == 0 && parser.isComplete();
-}
 const char* ReleaseJsonParser::getTagName() const { return tagName; }
 const char* ReleaseJsonParser::getFirmwareUrl() const { return firmwareUrl; }
 size_t ReleaseJsonParser::getFirmwareSize() const { return firmwareSize; }
 
 void ReleaseJsonParser::commitAsset() {
-  if (strcmp(currentAssetName, firmwareAssetName) == 0 && currentAssetUrl[0] != '\0') {
+  if (strcmp(currentAssetName, firmwareAssetName) == 0) {
     memcpy(firmwareUrl, currentAssetUrl, sizeof(firmwareUrl));
     firmwareSize = currentAssetSize;
     firmwareFound = true;
@@ -76,10 +69,6 @@ void ReleaseJsonParser::sOnKey(void* ctx, const char* key, size_t len) {
       if (self->depth == 1) {
         if (len == 8 && memcmp(key, "tag_name", 8) == 0)
           self->lastKey = LastKey::TAG_NAME;
-        else if (len == 5 && memcmp(key, "draft", 5) == 0)
-          self->lastKey = LastKey::DRAFT;
-        else if (len == 10 && memcmp(key, "prerelease", 10) == 0)
-          self->lastKey = LastKey::PRERELEASE;
         else if (len == 6 && memcmp(key, "assets", 6) == 0)
           self->lastKey = LastKey::ASSETS;
         else
@@ -109,24 +98,18 @@ void ReleaseJsonParser::sOnString(void* ctx, const char* value, size_t len) {
   switch (self->lastKey) {
     case LastKey::TAG_NAME:
       if (self->position == Position::TOP_LEVEL && self->depth == 1) {
-        self->tagFound = len > 0 && len < sizeof(self->tagName) && memchr(value, '\0', len) == nullptr;
-        self->tagName[0] = '\0';
+        // A truncated tag must not become a different, valid version.
+        self->tagFound = len < sizeof(self->tagName);
         if (self->tagFound) safeCopy(self->tagName, sizeof(self->tagName), value, len);
       }
       break;
     case LastKey::ASSET_NAME:
-      if (self->position == Position::IN_ASSET_OBJECT && self->assetDepth == 1) {
-        self->currentAssetName[0] = '\0';
-        if (len < sizeof(self->currentAssetName) && memchr(value, '\0', len) == nullptr)
-          safeCopy(self->currentAssetName, sizeof(self->currentAssetName), value, len);
-      }
+      if (self->position == Position::IN_ASSET_OBJECT && self->assetDepth == 1)
+        safeCopy(self->currentAssetName, sizeof(self->currentAssetName), value, len);
       break;
     case LastKey::ASSET_URL:
-      if (self->position == Position::IN_ASSET_OBJECT && self->assetDepth == 1) {
-        self->currentAssetUrl[0] = '\0';
-        if (len < sizeof(self->currentAssetUrl) && memchr(value, '\0', len) == nullptr)
-          safeCopy(self->currentAssetUrl, sizeof(self->currentAssetUrl), value, len);
-      }
+      if (self->position == Position::IN_ASSET_OBJECT && self->assetDepth == 1)
+        safeCopy(self->currentAssetUrl, sizeof(self->currentAssetUrl), value, len);
       break;
     default:
       break;
@@ -134,34 +117,17 @@ void ReleaseJsonParser::sOnString(void* ctx, const char* value, size_t len) {
   self->lastKey = LastKey::NONE;
 }
 
-void ReleaseJsonParser::sOnNumber(void* ctx, const char* value, size_t len) {
+void ReleaseJsonParser::sOnNumber(void* ctx, const char* value, size_t /*len*/) {
   auto* self = static_cast<ReleaseJsonParser*>(ctx);
 
   if (self->lastKey == LastKey::ASSET_SIZE && self->position == Position::IN_ASSET_OBJECT && self->assetDepth == 1) {
-    // GitHub sizes are nonnegative integer bytes. Use the firmware's uint32
-    // limit on hosts too; reject signs, exponent/fraction syntax and overflow.
-    uint32_t parsed = 0;
-    for (size_t i = 0; i < len; ++i) {
-      if (value[i] < '0' || value[i] > '9' ||
-          parsed > (std::numeric_limits<uint32_t>::max() - static_cast<unsigned>(value[i] - '0')) / 10) {
-        self->currentAssetSize = 0;
-        self->lastKey = LastKey::NONE;
-        return;
-      }
-      parsed = parsed * 10 + value[i] - '0';
-    }
-    self->currentAssetSize = parsed;
+    self->currentAssetSize = static_cast<size_t>(strtoul(value, nullptr, 10));
   }
   self->lastKey = LastKey::NONE;
 }
 
-void ReleaseJsonParser::sOnBool(void* ctx, bool value) {
-  auto* self = static_cast<ReleaseJsonParser*>(ctx);
-  if (self->position == Position::TOP_LEVEL && self->depth == 1) {
-    if (self->lastKey == LastKey::DRAFT) self->draft = value;
-    if (self->lastKey == LastKey::PRERELEASE) self->prerelease = value;
-  }
-  self->lastKey = LastKey::NONE;
+void ReleaseJsonParser::sOnBool(void* ctx, bool /*value*/) {
+  static_cast<ReleaseJsonParser*>(ctx)->lastKey = LastKey::NONE;
 }
 
 void ReleaseJsonParser::sOnNull(void* ctx) { static_cast<ReleaseJsonParser*>(ctx)->lastKey = LastKey::NONE; }
@@ -171,7 +137,6 @@ void ReleaseJsonParser::sOnObjectStart(void* ctx) {
 
   switch (self->position) {
     case Position::TOP_LEVEL:
-      if (self->depth == 0) self->rootComplete = false;
       self->depth++;
       self->lastKey = LastKey::NONE;
       break;
@@ -195,7 +160,6 @@ void ReleaseJsonParser::sOnObjectEnd(void* ctx) {
 
   switch (self->position) {
     case Position::TOP_LEVEL:
-      if (self->depth == 1) self->rootComplete = true;
       if (self->depth > 0) self->depth--;
       break;
     case Position::IN_ASSET_OBJECT:
