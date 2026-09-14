@@ -55,10 +55,11 @@ class ParsedText {
   std::vector<VisibleOffsetRebase> visibleOffsetRebases;
   std::deque<std::string> rubyTexts;
   BlockStyle blockStyle;
-  bool extraParagraphSpacing;
   bool hyphenationEnabled;
   bool focusReadingEnabled;
   bool characterWrap;
+  bool paragraphIndent;
+  bool firstLineEmitted;
   bool isNaturalAlign;
   bool hasRtlWord;
   bool usesCharacterWrap() const {
@@ -97,14 +98,15 @@ class ParsedText {
   std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId);
 
  public:
-  explicit ParsedText(const bool extraParagraphSpacing, const bool hyphenationEnabled = false,
+  explicit ParsedText(const bool /*extraParagraphSpacing*/, const bool hyphenationEnabled = false,
                       const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle(),
-                      const bool characterWrap = false)
+                      const bool characterWrap = false, const bool paragraphIndent = false)
       : blockStyle(blockStyle),
-        extraParagraphSpacing(extraParagraphSpacing),
         hyphenationEnabled(effectiveHyphenationEnabled(hyphenationEnabled)),
         focusReadingEnabled(focusReadingEnabled),
         characterWrap(characterWrap),
+        paragraphIndent(paragraphIndent),
+        firstLineEmitted(blockStyle.fromBrElement),
         isNaturalAlign(false),
         hasRtlWord(false) {}
   ~ParsedText() = default;
@@ -120,7 +122,12 @@ class ParsedText {
   }
   std::string getRubyTextAt(size_t index) const { return index < rubyTexts.size() ? rubyTexts[index] : std::string(); }
   void ensureRubyCapacity();
-  void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
+  void setBlockStyle(const BlockStyle& blockStyle) {
+    this->blockStyle = blockStyle;
+    // startNewTextBlock reuses an empty object for a fresh paragraph. A <br>
+    // remains a line continuation, not another paragraph's first line.
+    if (words.empty()) firstLineEmitted = blockStyle.fromBrElement;
+  }
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }

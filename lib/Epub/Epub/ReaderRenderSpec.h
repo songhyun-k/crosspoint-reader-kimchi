@@ -22,5 +22,6 @@ struct ReaderRenderSpec {
   uint8_t imageRendering = 0;
   bool focusReadingEnabled = false;
   bool characterWrap = true;
+  bool paragraphIndent = false;
   bool operator==(const ReaderRenderSpec&) const = default;
 };

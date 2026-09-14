@@ -662,17 +662,19 @@ void ParsedText::ensureRubyCapacity() {
 }
 
 int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer& renderer, const int fontId) const {
-  if (!isFirstLine || !isNaturalAlign) {
+  if (!isFirstLine || firstLineEmitted || !isNaturalAlign) {
     return 0;
   }
   if (blockStyle.textIndentDefined) {
-    if (blockStyle.textIndent < 0 || !extraParagraphSpacing) {
-      return blockStyle.textIndent;
-    }
-    return 0;
+    // An explicit zero is intentional too. CSS wins without adding the user
+    // indent, independently of vertical paragraph spacing.
+    return blockStyle.textIndent;
   }
-  if (!extraParagraphSpacing) {
-    return renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR) * 3;
+  if (paragraphIndent) {
+    // Position the first line by one ideographic space without inserting a
+    // synthetic character into source text or visible-position/link metadata.
+    const int width = renderer.getTextAdvanceX(fontId, "\xE3\x80\x80", EpdFontFamily::REGULAR);
+    return width > 0 ? width : renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR) * 3;
   }
   return 0;
 }
@@ -745,6 +747,7 @@ bool ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
 
   // Remove consumed words so size() reflects only remaining words
   if (emittedLines > 0) {
+    firstLineEmitted = true;
     const size_t consumed = lineBreakIndices[emittedLines - 1];
     words.erase(words.begin(), words.begin() + consumed);
     wordStyles.erase(wordStyles.begin(), wordStyles.begin() + consumed);

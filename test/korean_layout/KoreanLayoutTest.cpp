@@ -59,7 +59,8 @@ class KoreanLayoutTest : public testing::Test {
         [this](std::shared_ptr<TextBlock> block, uint32_t offset) { lines.push_back({std::move(block), offset}); },
         last);
   }
-  bool parse(const std::string& content, uint16_t width = 220, uint16_t height = 150, bool characterWrap = true) {
+  bool parse(const std::string& content, uint16_t width = 220, uint16_t height = 150, bool characterWrap = true,
+             bool paragraphIndent = false, bool embeddedStyle = true) {
     const std::string path = "chapter.xhtml";
     const std::string html = "<html><body>" + content + "</body></html>";
     storage_test::files[path] = std::vector<uint8_t>(html.begin(), html.end());
@@ -74,7 +75,7 @@ class KoreanLayoutTest : public testing::Test {
           }
           pages.push_back(std::move(page));
         },
-        true, "", "", 0, {}, nullptr, nullptr, characterWrap);
+        embeddedStyle, "", "", 0, {}, nullptr, nullptr, characterWrap, paragraphIndent);
     return parser.parseAndBuildPages();
   }
 };
@@ -336,7 +337,12 @@ TEST_F(KoreanLayoutTest, RealPartialCacheAlsoRejectsAChangedCharacterWrapSetting
   ASSERT_TRUE(reopened.loadSectionFile(spec));
   EXPECT_TRUE(reopened.isPartial());
   ASSERT_NE(reopened.loadPage(0), nullptr);
+  const auto saved = storage_test::files.at("cache/sections/0.bin");
   spec.characterWrap = false;
+  EXPECT_FALSE(reopened.loadSectionFile(spec));
+  storage_test::files["cache/sections/0.bin"] = saved;
+  spec.characterWrap = true;
+  spec.paragraphIndent = true;
   EXPECT_FALSE(reopened.loadSectionFile(spec));
 }
 
@@ -354,4 +360,124 @@ TEST_F(KoreanLayoutTest, XmlSectionNeverFinalizesAfterTextArenaFailure) {
   EXPECT_FALSE(section.isBuildComplete());
   EXPECT_FALSE(Storage.exists("cache/sections/0.bin"));
   EXPECT_FALSE(Storage.exists("cache/sections/0.bin.part"));
+}
+
+TEST_F(KoreanLayoutTest, ParagraphIndentDefaultsOffAndIsIndependentOfParagraphSpacing) {
+  EXPECT_FALSE(ReaderRenderSpec{}.paragraphIndent);
+  const int indentWidth = renderer.getTextAdvanceX(1, "\xE3\x80\x80", R);
+  ASSERT_GT(indentWidth, 0);
+  for (bool spacing : {false, true}) {
+    for (bool indent : {false, true}) {
+      for (bool wrap : {false, true}) {
+        lines.clear();
+        ParsedText text(spacing, false, false, BlockStyle{}, wrap, indent);
+        text.addWord("가나다라마바사아자차카타파하", R);
+        ASSERT_TRUE(layout(text, 125));
+        ASSERT_GT(lines.size(), 1u);
+        EXPECT_EQ(lines[0].block->wordXpos(0), indent ? indentWidth : 0);
+        for (size_t i = 1; i < lines.size(); ++i) EXPECT_EQ(lines[i].block->wordXpos(0), 0);
+        EXPECT_EQ(contents(lines), "가나다라마바사아자차카타파하");
+      }
+    }
+  }
+}
+
+TEST_F(KoreanLayoutTest, ExplicitCssZeroPositiveAndHangingIndentNeverDoubleWithUserIndent) {
+  for (bool spacing : {false, true}) {
+    for (bool indent : {false, true}) {
+      for (int css : {0, 17, -7}) {
+        lines.clear();
+        BlockStyle style = zeroIndent();
+        style.textIndent = css;
+        ParsedText text(spacing, false, false, style, true, indent);
+        text.addWord("가나다라마바사아자차카타파하", R);
+        ASSERT_TRUE(layout(text, 125));
+        ASSERT_GT(lines.size(), 1u);
+        EXPECT_EQ(lines[0].block->wordXpos(0), css);
+        EXPECT_EQ(lines[1].block->wordXpos(0), 0);
+      }
+    }
+  }
+}
+
+TEST_F(KoreanLayoutTest, SoftFlushDoesNotRepeatIndentOrChangeVisibleOffsets) {
+  ParsedText text(false, false, false, BlockStyle{}, true, true);
+  const int indentWidth = renderer.getTextAdvanceX(1, "\xE3\x80\x80", R);
+  text.addWord("가나다", R, false, false, 1200);
+  ASSERT_TRUE(layout(text, 480, false));
+  ASSERT_TRUE(lines.empty());
+  for (int i = 0; i < 25; ++i) {
+    text.addWord("라마바사아자", R, false, true, 1203 + i * 6);
+    ASSERT_TRUE(layout(text, 125, false));
+  }
+  ASSERT_TRUE(layout(text, 125));
+  ASSERT_GT(lines.size(), 20u);
+  EXPECT_EQ(lines[0].block->wordXpos(0), indentWidth);
+  EXPECT_EQ(lines[0].offset, 1200u);
+  for (size_t i = 1; i < lines.size(); ++i) EXPECT_EQ(lines[i].block->wordXpos(0), 0);
+  lines.clear();
+  text.setBlockStyle(BlockStyle{});  // empty parser object reused for the next paragraph
+  text.addWord("새문단", R, false, false, 1500);
+  ASSERT_TRUE(layout(text, 480));
+  EXPECT_EQ(lines[0].block->wordXpos(0), indentWidth);
+  EXPECT_EQ(lines[0].offset, 1500u);
+}
+
+TEST_F(KoreanLayoutTest, HtmlBreakContinuesItsParagraphButANewParagraphGetsItsOwnIndent) {
+  ASSERT_TRUE(parse("<p style='text-indent:17px'>가나다<br/>라마바</p><p>사아자</p>", 480, 800, true, true));
+  ASSERT_EQ(lines.size(), 3u);
+  EXPECT_EQ(lines[0].block->wordXpos(0), 17);
+  EXPECT_EQ(lines[1].block->wordXpos(0), 0);
+  EXPECT_EQ(lines[2].block->wordXpos(0), renderer.getTextAdvanceX(1, "\xE3\x80\x80", R));
+  EXPECT_EQ(contents(lines), "가나다라마바사아자");
+}
+
+TEST_F(KoreanLayoutTest, InlineCssIndentWorksWithoutAnExternalStylesheetAndRespectsStyleToggle) {
+  for (const int indent : {0, 17, -7}) {
+    for (const bool styles : {true, false}) {
+      lines.clear();
+      const std::string html = "<p style='text-indent:" + std::to_string(indent) + "px'>한글문단</p>";
+      ASSERT_TRUE(parse(html, 480, 800, true, true, styles));
+      ASSERT_EQ(lines.size(), 1u);
+      EXPECT_EQ(lines[0].block->wordXpos(0), styles ? indent : renderer.getTextAdvanceX(1, "\xE3\x80\x80", R));
+    }
+  }
+}
+
+TEST_F(KoreanLayoutTest, RealSectionInvalidatesIndentAndPreservesContentPositionAcrossRepagination) {
+  std::string html = "<html><body>";
+  for (int i = 0; i < 45; ++i) html += "<p>가나다라마바사아자차카타파하 가나다라마바</p>";
+  html += "</body></html>";
+  storage_test::files["cache/html/0.html"] = std::vector<uint8_t>(html.begin(), html.end());
+  const auto epub = std::make_shared<Epub>();
+  ReaderRenderSpec spec;
+  spec.fontId = 1;
+  spec.viewportWidth = 227;
+  spec.viewportHeight = 170;
+  uint32_t position = 0;
+  {
+    Section original(epub, 0, renderer);
+    ASSERT_TRUE(original.createSectionFile(spec));
+    position = original.getVisibleTextOffsetForPage(3).value();
+    auto first = original.loadPage(0);
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(static_cast<PageLine&>(*first->elements[0]).getBlock()->wordXpos(0), 0);
+  }
+  spec.paragraphIndent = true;
+  Section changed(epub, 0, renderer);
+  EXPECT_FALSE(changed.loadSectionFile(spec));
+  ASSERT_TRUE(changed.createSectionFile(spec));
+  ASSERT_TRUE(changed.loadSectionFile(spec));
+  const auto page = changed.getPageForVisibleTextOffset(position);
+  ASSERT_TRUE(page.has_value());
+  EXPECT_LE(changed.getVisibleTextOffsetForPage(*page).value(), position);
+  if (*page + 1 < changed.pageCount) EXPECT_GT(changed.getVisibleTextOffsetForPage(*page + 1).value(), position);
+  auto first = changed.loadPage(0);
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ(static_cast<PageLine&>(*first->elements[0]).getBlock()->wordXpos(0),
+            renderer.getTextAdvanceX(1, "\xE3\x80\x80", R));
+  textsettings::PreviewKey preview;
+  auto changedPreview = preview;
+  changedPreview.paragraphIndent = true;
+  EXPECT_NE(preview, changedPreview);
 }

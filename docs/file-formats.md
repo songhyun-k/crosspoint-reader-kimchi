@@ -92,6 +92,17 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 49
+
+Adds the one-byte `paragraphIndent` flag after `characterWrap`. Positive, zero
+and negative CSS `text-indent` values take precedence; otherwise the independent
+option uses the advance of U+3000 once per paragraph, with no added source text.
+Paragraph spacing no longer controls first-line indentation. A soft-flush tail
+or `<br>` continuation does not restart the indent. Both new flags participate in
+complete/partial-cache validation; the header is 43 bytes (scalar serialized
+fields, no C++ struct padding). The ImHex example below is the historical
+upstream v41 pattern, not a v49 decoder.
+
 ### Version 48
 
 Adds the one-byte `characterWrap` layout flag after `focusReadingEnabled` in
