@@ -1976,20 +1976,14 @@ bool GfxRenderer::copyBufferToRegion(int lx, int ly, int lw, int lh, const uint8
 }
 
 int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style style) const {
-  const auto family = fontMap.find(fontId);
-  if (family == fontMap.end()) return 0;
-  const bool syntheticBold = family->second.needsSyntheticBold(style);
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) return 0;
+  const bool syntheticBold = fontIt->second.needsSyntheticBold(style);
   // Advance table fast-path for SD card fonts during layout
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
     return fp4::toPixel(EpdFont::advanceForRender(sdIt->second->getAdvance(' ', resolvedStyle), syntheticBold));
-  }
-
-  const auto fontIt = fontMap.find(fontId);
-  if (fontIt == fontMap.end()) {
-    LOG_ERR("GFX", "Font %d not found", fontId);
-    return 0;
   }
 
   const EpdGlyph* spaceGlyph = fontIt->second.getGlyph(' ', style);
@@ -1998,9 +1992,10 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
 
 int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
                                  const EpdFontFamily::Style style) const {
-  const auto family = fontMap.find(fontId);
-  if (family == fontMap.end()) return 0;
-  const bool syntheticBold = family->second.needsSyntheticBold(style);
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) return 0;
+  const auto& font = fontIt->second;
+  const bool syntheticBold = font.needsSyntheticBold(style);
   // Advance table fast-path for SD card fonts during layout.
   // Kern data is not loaded during layout (consistent with previous metadataOnly behavior),
   // so we return just the space advance without kerning.
@@ -2010,9 +2005,6 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
     return fp4::toPixel(EpdFont::advanceForRender(sdIt->second->getAdvance(' ', resolvedStyle), syntheticBold));
   }
 
-  const auto fontIt = fontMap.find(fontId);
-  if (fontIt == fontMap.end()) return 0;
-  const auto& font = fontIt->second;
   const EpdGlyph* spaceGlyph = font.getGlyph(' ', style);
   const int32_t spaceAdvanceFP = spaceGlyph ? static_cast<int32_t>(spaceGlyph->advanceX) : 0;
   // Combine space advance + flanking kern into one fixed-point sum before snapping.
@@ -2057,8 +2049,21 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   const bool syntheticBold = font.needsSyntheticBold(style);
   const bool halfSize = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
   const auto sdIt = sdCardFonts_.find(resolvedFontId);
-  const SdCardFont* sd = sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable() ? sdIt->second : nullptr;
-  const uint8_t styleIdx = sd ? resolveSdCardStyle(*sd, style) : 0;
+  // Metadata-only layout keeps upstream's no-kerning/no-ligature fast path.
+  if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
+    const uint8_t styleIdx = resolveSdCardStyle(*sdIt->second, style);
+    while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
+      if (BidiUtils::isTransparentMark(cp) || utf8IsCombiningMark(cp)) continue;
+      int32_t advance = sdIt->second->getAdvance(cp, styleIdx);
+      if (advance == 0) {
+        const EpdGlyph* glyph = font.getGlyph(cp, style);
+        advance = glyph ? glyph->advanceX : 0;
+      }
+      // Match drawText's per-glyph pixel rounding, including synthetic bold.
+      widthPx += fp4::toPixel(EpdFont::advanceForRender(advance, syntheticBold, halfSize));
+    }
+    return widthPx;
+  }
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
     // RTL vowel marks (niqqud/harakat) are zero-advance overlays in drawText — no width.
     if (BidiUtils::isTransparentMark(cp)) {
@@ -2076,12 +2081,8 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       widthPx += fp4::toPixel(prevAdvanceFP + kernFP);         // snap 12.4 fixed-point to nearest pixel
     }
 
-    int32_t advance = sd ? sd->getAdvance(cp, styleIdx) : 0;
-    if (advance == 0) {
-      const EpdGlyph* glyph = font.getGlyph(cp, style);
-      advance = glyph ? glyph->advanceX : 0;
-    }
-    prevAdvanceFP = EpdFont::advanceForRender(advance, syntheticBold, halfSize);
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    prevAdvanceFP = EpdFont::advanceForRender(glyph ? glyph->advanceX : 0, syntheticBold, halfSize);
     prevCp = cp;
   }
   widthPx += fp4::toPixel(prevAdvanceFP);  // final glyph's advance
