@@ -59,11 +59,12 @@ class XtcParser {
 
   /**
    * Streaming page load
-   * Memory-efficient method that reads page data in chunks.
+   * Memory-efficient method that reads page data in chunks. Allocation and
+   * short-read failures are reported; the source file is closed on every exit.
    *
    * @param pageIndex Page index
    * @param callback Callback function to receive data chunks
-   * @param chunkSize Chunk size (default: 1024 bytes)
+   * @param chunkSize Nonzero chunk size (default: 1024 bytes)
    * @return Error code
    */
   XtcError loadPageStreaming(uint32_t pageIndex,

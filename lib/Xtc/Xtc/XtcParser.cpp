@@ -10,6 +10,7 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 
 #include <cstring>
 
@@ -388,9 +389,13 @@ const std::vector<ChapterInfo>& XtcParser::getChapters() {
   return m_chapters;
 }
 
-bool XtcParser::getPageInfo(uint32_t pageIndex, PageInfo& info) { return readPageTableEntry(pageIndex, info); }
+bool XtcParser::getPageInfo(uint32_t pageIndex, PageInfo& info) {
+  ScopedCleanup closeAfterRead{[this] { closeFile(); }};
+  return readPageTableEntry(pageIndex, info);
+}
 
 size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSize) {
+  ScopedCleanup closeAfterRead{[this] { closeFile(); }};
   if (!m_isOpen) {
     m_lastError = XtcError::FILE_NOT_FOUND;
     return 0;
@@ -437,6 +442,14 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
     return 0;
   }
 
+  // Renderers size their buffers from the page table. XTH's existing plane
+  // layout requires byte-aligned column heights; reject inconsistent input.
+  if (page.width == 0 || page.height == 0 || pageHeader.width != page.width || pageHeader.height != page.height ||
+      (m_bitDepth == 2 && page.height % 8 != 0) || pageHeader.compression != 0) {
+    m_lastError = XtcError::CORRUPTED_HEADER;
+    return 0;
+  }
+
   // Calculate bitmap size based on bit depth
   // XTG (1-bit): Row-major, ((width+7)/8) * height bytes
   // XTH (2-bit): Two bit planes, column-major, ((width * height + 7) / 8) * 2 bytes
@@ -449,7 +462,7 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
   }
 
   // Check buffer size
-  if (bufferSize < bitmapSize) {
+  if (!buffer || bufferSize < bitmapSize) {
     LOG_DBG("XTC", "Buffer too small: need %u, have %u", bitmapSize, bufferSize);
     m_lastError = XtcError::MEMORY_ERROR;
     return 0;
@@ -470,26 +483,31 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
 XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
                                       std::function<void(const uint8_t* data, size_t size, size_t offset)> callback,
                                       size_t chunkSize) {
+  ScopedCleanup closeAfterRead{[this] { closeFile(); }};
   if (!m_isOpen) {
-    return XtcError::FILE_NOT_FOUND;
+    return m_lastError = XtcError::FILE_NOT_FOUND;
   }
 
   if (pageIndex >= m_header.pageCount) {
-    return XtcError::PAGE_OUT_OF_RANGE;
+    return m_lastError = XtcError::PAGE_OUT_OF_RANGE;
+  }
+
+  if (chunkSize == 0 || !callback) {
+    return m_lastError = XtcError::CORRUPTED_HEADER;
   }
 
   PageInfo page;
   if (!readPageTableEntry(pageIndex, page)) {
-    return XtcError::READ_ERROR;
+    return m_lastError = XtcError::READ_ERROR;
   }
 
   if (!ensureFileOpen()) {
-    return XtcError::FILE_NOT_FOUND;
+    return m_lastError = XtcError::FILE_NOT_FOUND;
   }
 
   // Seek to page data
   if (!m_file.seek64(page.offset)) {
-    return XtcError::READ_ERROR;
+    return m_lastError = XtcError::READ_ERROR;
   }
 
   // Read and skip page header (XTG for 1-bit, XTH for 2-bit)
@@ -497,7 +515,12 @@ XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
   size_t headerRead = m_file.read(reinterpret_cast<uint8_t*>(&pageHeader), sizeof(XtgPageHeader));
   const uint32_t expectedMagic = (m_bitDepth == 2) ? XTH_MAGIC : XTG_MAGIC;
   if (headerRead != sizeof(XtgPageHeader) || pageHeader.magic != expectedMagic) {
-    return XtcError::READ_ERROR;
+    return m_lastError = XtcError::READ_ERROR;
+  }
+
+  if (page.width == 0 || page.height == 0 || pageHeader.width != page.width || pageHeader.height != page.height ||
+      (m_bitDepth == 2 && page.height % 8 != 0) || pageHeader.compression != 0) {
+    return m_lastError = XtcError::CORRUPTED_HEADER;
   }
 
   // Calculate bitmap size based on bit depth
@@ -510,23 +533,32 @@ XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
     bitmapSize = ((pageHeader.width + 7) / 8) * pageHeader.height;
   }
 
-  // Read in chunks
-  std::vector<uint8_t> chunk(chunkSize);
+  const uint64_t fileSize = m_file.fileSize64();
+  if (page.offset > fileSize || sizeof(XtgPageHeader) > fileSize - page.offset ||
+      bitmapSize > fileSize - page.offset - sizeof(XtgPageHeader)) {
+    return m_lastError = XtcError::READ_ERROR;
+  }
+
+  // A failed contiguous allocation must be an error, not an exception/abort.
+  // At 480px, the reader requests 16 rows * 60 bytes = 960 bytes.
+  chunkSize = std::min(chunkSize, bitmapSize);
+  std::unique_ptr<uint8_t[]> chunk(new (std::nothrow) uint8_t[chunkSize]);
+  if (!chunk) return m_lastError = XtcError::MEMORY_ERROR;
   size_t totalRead = 0;
 
   while (totalRead < bitmapSize) {
     size_t toRead = std::min(chunkSize, bitmapSize - totalRead);
-    size_t bytesRead = m_file.read(chunk.data(), toRead);
+    const int bytesRead = m_file.read(chunk.get(), toRead);
 
-    if (bytesRead == 0) {
-      return XtcError::READ_ERROR;
+    if (bytesRead < 0 || static_cast<size_t>(bytesRead) != toRead) {
+      return m_lastError = XtcError::READ_ERROR;
     }
 
-    callback(chunk.data(), bytesRead, totalRead);
-    totalRead += bytesRead;
+    callback(chunk.get(), toRead, totalRead);
+    totalRead += toRead;
   }
 
-  return XtcError::OK;
+  return m_lastError = XtcError::OK;
 }
 
 bool XtcParser::isValidXtcFile(const char* filepath) {

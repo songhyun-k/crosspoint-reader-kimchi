@@ -149,6 +149,12 @@ void SdCardFont::resetStyleMiniData(PerStyle& s) {
 }
 
 void SdCardFont::freeStyleKernLigatureData(PerStyle& s) {
+  // Both views can outlive the resident table after a cache release. Clear
+  // published references in the common teardown, including read/alloc failures.
+  s.stubData.ligaturePairs = nullptr;
+  s.stubData.ligaturePairCount = 0;
+  s.miniData.ligaturePairs = nullptr;
+  s.miniData.ligaturePairCount = 0;
   delete[] s.kernLeftClasses;
   s.kernLeftClasses = nullptr;
   delete[] s.kernRightClasses;
@@ -243,7 +249,7 @@ void SdCardFont::applyKernLigaturePointers(PerStyle& s, EpdFontData& data) const
   data.kernRightClassCount = s.miniKernRightClassCount;
   // Ligatures are small (typically < 1KB) so they stay resident.
   data.ligaturePairs = s.ligaturePairs;
-  data.ligaturePairCount = s.header.ligaturePairCount;
+  data.ligaturePairCount = s.ligaturePairs ? s.header.ligaturePairCount : 0;
 }
 
 bool SdCardFont::loadStyleKernLigatureData(PerStyle& s) {
@@ -316,7 +322,7 @@ bool SdCardFont::loadStyleKernLigatureData(PerStyle& s) {
   // Kern stays nullptr on the stub — it is only wired in miniData via
   // applyKernLigaturePointers() after buildMiniKernMatrix() runs.
   s.stubData.ligaturePairs = s.ligaturePairs;
-  s.stubData.ligaturePairCount = s.header.ligaturePairCount;
+  s.stubData.ligaturePairCount = s.ligaturePairs ? s.header.ligaturePairCount : 0;
 
   LOG_DBG("SDCF", "Kern classes + lig loaded: kernL=%u, kernR=%u, ligs=%u", s.header.kernLeftEntryCount,
           s.header.kernRightEntryCount, s.header.ligaturePairCount);

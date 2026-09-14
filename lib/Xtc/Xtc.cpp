@@ -531,6 +531,10 @@ uint8_t Xtc::getBitDepth() const {
   return parser->getBitDepth();
 }
 
+bool Xtc::getPageInfo(uint32_t pageIndex, xtc::PageInfo& info) const {
+  return loaded && parser && parser->getPageInfo(pageIndex, info);
+}
+
 size_t Xtc::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSize) const {
   if (!loaded || !parser) {
     return 0;

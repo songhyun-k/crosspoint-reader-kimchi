@@ -1,10 +1,12 @@
 #include "XtcReaderActivity.h"
 
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <Xtc/XtcBitmap.h>
 
 #include <algorithm>
 
@@ -141,45 +143,45 @@ void XtcReaderActivity::renderStatusBarOverlay(GfxRenderer& renderer, const Stat
 }
 
 void XtcReaderActivity::renderPage() {
-  const uint16_t pageWidth = xtc->getPageWidth();
-  const uint16_t pageHeight = xtc->getPageHeight();
+  const auto showError = [this](const StrId message) {
+    renderer.clearScreen();
+    renderer.drawCenteredText(UI_12_FONT_ID, 300, I18N.get(message), true, EpdFontFamily::BOLD);
+    renderer.displayBuffer();
+  };
+  xtc::PageInfo page{};
+  if (!xtc->getPageInfo(currentPage, page) || page.width == 0 || page.height == 0) {
+    showError(StrId::STR_PAGE_LOAD_ERROR);
+    return;
+  }
+  const uint16_t pageWidth = page.width;
+  const uint16_t pageHeight = page.height;
   const uint8_t bitDepth = xtc->getBitDepth();
-
-  size_t pageBufferSize;
-  if (bitDepth == 2) {
-    pageBufferSize = ((static_cast<size_t>(pageWidth) * pageHeight + 7) / 8) * 2;
-  } else {
-    pageBufferSize = ((pageWidth + 7) / 8) * pageHeight;
-  }
-
-  uint8_t* pageBuffer = static_cast<uint8_t*>(malloc(pageBufferSize));
-  if (!pageBuffer) {
-    LOG_ERR("XTR", "Failed to allocate page buffer (%lu bytes)", pageBufferSize);
-    renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_MEMORY_ERROR), true, EpdFontFamily::BOLD);
-    renderer.displayBuffer();
-    return;
-  }
-
-  size_t bytesRead = xtc->loadPage(currentPage, pageBuffer, pageBufferSize);
-  if (bytesRead == 0) {
-    LOG_ERR("XTR", "Failed to load page %lu: bufferSize=%lu bitDepth=%u error=%s", currentPage, pageBufferSize,
-            bitDepth, xtc::errorToString(xtc->getLastError()));
-    free(pageBuffer);
-    renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
-    renderer.displayBuffer();
-    return;
-  }
 
   renderer.clearScreen();
 
-  const uint16_t maxSrcY = pageHeight;
-
   if (bitDepth == 2) {
+    if (pageHeight % 8 != 0) {
+      showError(StrId::STR_PAGE_LOAD_ERROR);
+      return;
+    }
+    const size_t pageBufferSize = ((static_cast<size_t>(pageWidth) * pageHeight + 7) / 8) * 2;
+    auto pageBuffer = xtc::allocateGrayscalePage(pageBufferSize, [this] {
+      if (auto* caches = renderer.getFontCacheManager()) caches->releaseSdFontCaches();
+    });
+    if (!pageBuffer) {
+      LOG_ERR("XTR", "Page allocation failed after cache release and one retry (%u bytes)", pageBufferSize);
+      showError(StrId::STR_MEMORY_ERROR);
+      return;
+    }
+    if (xtc->loadPage(currentPage, pageBuffer.get(), pageBufferSize) != pageBufferSize) {
+      LOG_ERR("XTR", "Failed to load grayscale page %lu: %s", currentPage, xtc::errorToString(xtc->getLastError()));
+      pageBuffer.reset();  // release the large input before rendering an error UI
+      showError(StrId::STR_PAGE_LOAD_ERROR);
+      return;
+    }
     const size_t planeSize = (static_cast<size_t>(pageWidth) * pageHeight + 7) / 8;
-    const uint8_t* plane1 = pageBuffer;
-    const uint8_t* plane2 = pageBuffer + planeSize;
+    const uint8_t* plane1 = pageBuffer.get();
+    const uint8_t* plane2 = pageBuffer.get() + planeSize;
     const size_t colBytes = (pageHeight + 7) / 8;
 
     auto getPixelValue = [&](uint16_t x, uint16_t y) -> uint8_t {
@@ -252,29 +254,23 @@ void XtcReaderActivity::renderPage() {
 
     renderer.cleanupGrayscaleWithFrameBuffer();
 
-    free(pageBuffer);
-
     LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale)", currentPage + 1, xtc->getPageCount());
     return;
   } else {
-    const size_t srcRowBytes = (pageWidth + 7) / 8;
-
-    for (uint16_t srcY = 0; srcY < maxSrcY; srcY++) {
-      const size_t srcRowStart = srcY * srcRowBytes;
-
-      for (uint16_t srcX = 0; srcX < pageWidth; srcX++) {
-        const size_t srcByte = srcRowStart + srcX / 8;
-        const size_t srcBit = 7 - (srcX % 8);
-        const bool isBlack = !((pageBuffer[srcByte] >> srcBit) & 1);
-
-        if (isBlack) {
-          renderer.drawPixel(srcX, srcY, true);
-        }
-      }
+    const size_t bandBytes = ((static_cast<size_t>(pageWidth) + 7) / 8) * xtc::MONO_STREAM_ROWS;
+    const auto error = xtc->loadPageStreaming(
+        currentPage,
+        [this, pageWidth](const uint8_t* data, const size_t size, const size_t offset) {
+          xtc::drawMonochromeBand(data, size, offset, pageWidth,
+                                  [this](uint16_t x, uint16_t y) { renderer.drawPixel(x, y, true); });
+        },
+        bandBytes);
+    if (error != xtc::XtcError::OK) {
+      LOG_ERR("XTR", "Failed to stream page %lu: %s", currentPage, xtc::errorToString(error));
+      showError(error == xtc::XtcError::MEMORY_ERROR ? StrId::STR_MEMORY_ERROR : StrId::STR_PAGE_LOAD_ERROR);
+      return;
     }
   }
-
-  free(pageBuffer);
 
   if (SETTINGS.statusBarSpec().xtcMode == CrossPointSettings::XTC_STATUS_BAR_MODE::XTC_STATUS_BAR_TOP) {
     renderStatusBarOverlay(renderer, StatusBarOverlayPosition::Top);
