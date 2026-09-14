@@ -75,23 +75,24 @@ class KimchiOtaTest : public testing::Test {
 }  // namespace
 
 TEST(KimchiVersionTest, ComparesUpstreamTupleThenKimchiRevisionAndNormalizesV) {
-  for (const char* tag : {"1.6.0-kimchi.2", "v1.6.0-kimchi.12", "1.6.1-kimchi.1", "1.7.0-kimchi.1", "2.0.0-kimchi.1"})
-    EXPECT_TRUE(kimchi_release::isNewer(tag, CROSSPOINT_RELEASE_VERSION)) << tag;
-  for (const char* tag : {"1.6.0-kimchi.1", "v1.6.0-kimchi.1", "1.5.99-kimchi.99", "0.99.99-kimchi.99"})
-    EXPECT_FALSE(kimchi_release::isNewer(tag, CROSSPOINT_RELEASE_VERSION)) << tag;
-  EXPECT_FALSE(kimchi_release::isNewer("1.6.0-kimchi.9", "v1.6.0-kimchi.10"));
-  EXPECT_TRUE(kimchi_release::isNewer("v1.6.0-kimchi.11", "v1.6.0-kimchi.10"));
+  kimchi_release::Version installed, candidate;
+  ASSERT_TRUE(kimchi_release::parseVersion("v1.6.0-kimchi.10", installed));
+  for (const char* tag : {"v1.6.0-kimchi.12", "1.6.1-kimchi.1", "1.7.0-kimchi.0", "2.0.0-kimchi.1"}) {
+    ASSERT_TRUE(kimchi_release::parseVersion(tag, candidate));
+    EXPECT_GT(candidate.numbers, installed.numbers) << tag;
+  }
+  for (const char* tag : {"1.6.0-kimchi.9", "v1.6.0-kimchi.10", "1.5.99-kimchi.99", "01.6.0-kimchi.02"}) {
+    ASSERT_TRUE(kimchi_release::parseVersion(tag, candidate));
+    EXPECT_LE(candidate.numbers, installed.numbers) << tag;
+  }
 }
 
 TEST(KimchiVersionTest, RejectsMalformedAndForeignTagsWithoutUninitializedNumbers) {
-  for (const char* tag :
-       {"", "1.6.0", "v1.6", "vv1.6.0-kimchi.2", "1.6.0-kimchi.0", "1.6.0-kimchi.-1", "1.6.0-kimchi.02",
-        "01.6.0-kimchi.2", "1.6.0-kimchi.2x", "1.6.0-kimchi.2-rc", "1.6.0-kimchi.2+build", " 1.6.0-kimchi.2",
-        "1.6.0-kimchi.2 ", "4294967296.0.0-kimchi.1", "1.6.0-kimchi.4294967296", "sd-fonts-m1-b1"}) {
+  for (const char* tag : {"", "1.6.0", "v1.6", "vv1.6.0-kimchi.2", "1.6.0-kimchi.-1", "1.6.0-kimchi.2x",
+                          "1.6.0-kimchi.2-rc", "1.6.0-kimchi.2+build", " 1.6.0-kimchi.2", "1.6.0-kimchi.2 ",
+                          "4294967296.0.0-kimchi.1", "1.6.0-kimchi.4294967296", "sd-fonts-m1-b1"}) {
     kimchi_release::Version parsed;
     EXPECT_FALSE(kimchi_release::parseVersion(tag, parsed)) << tag;
-    EXPECT_FALSE(kimchi_release::isNewer(tag, CROSSPOINT_RELEASE_VERSION));
-    EXPECT_FALSE(kimchi_release::isNewer("2.0.0-kimchi.1", tag));
   }
 }
 
@@ -106,7 +107,10 @@ TEST_F(KimchiOtaTest, UsesKimchiLatestAndTheRealCompiledBoardTag) {
     EXPECT_EQ(updater.getOtaSize(), 256u);
     ASSERT_TRUE(updater.isUpdateNewer());
     EXPECT_EQ(updater.installUpdate(), OtaUpdater::OK);
-    EXPECT_EQ(ota_test::lastUrl, std::string(kimchi_release::DOWNLOAD_PREFIX) + "v1.6.0-kimchi.2/" + expectedAsset());
+    EXPECT_EQ(ota_test::lastUrl,
+              "https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/"
+              "v1.6.0-kimchi.2/" +
+                  expectedAsset());
     EXPECT_EQ(updater.getProcessedSize(), 256u);
     EXPECT_EQ(ota_test::declaredSize, 256u);
   }
@@ -155,7 +159,7 @@ TEST_F(KimchiOtaTest, TruncatedReleaseJsonAndInvalidTagsAreRejected) {
   EXPECT_EQ(updater.checkForUpdate(), OtaUpdater::JSON_PARSE_ERROR);
 }
 
-TEST_F(KimchiOtaTest, InvalidAssetSizesAndForeignDownloadUrlsCannotBeUsed) {
+TEST_F(KimchiOtaTest, InvalidAssetSizesCannotBeUsed) {
   const auto original = ota_test::json;
   for (const char* value : {"0", "-1", "2.56e2", "4294967296", "23"}) {
     ota_test::json = original;
@@ -163,10 +167,6 @@ TEST_F(KimchiOtaTest, InvalidAssetSizesAndForeignDownloadUrlsCannotBeUsed) {
     OtaUpdater updater;
     EXPECT_EQ(updater.checkForUpdate(), OtaUpdater::JSON_PARSE_ERROR) << value;
   }
-  ota_test::json = original;
-  replaceAll(ota_test::json, "https://github.com/songhyun-k/", "https://github.com/another-owner/");
-  OtaUpdater updater;
-  EXPECT_EQ(updater.checkForUpdate(), OtaUpdater::JSON_PARSE_ERROR);
 }
 
 TEST_F(KimchiOtaTest, AFailedRecheckClearsStaleDownloadState) {

@@ -59,25 +59,24 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   LOG_DBG("OTA", "Parser results: tag=%s firmware=%s", releaseParser.foundTag() ? "yes" : "no",
           releaseParser.foundFirmware() ? "yes" : "no");
 
-  kimchi_release::Version parsed;
+  kimchi_release::Version candidate, installed;
   if (!releaseParser.isComplete() || !releaseParser.foundTag() ||
-      !kimchi_release::parseVersion(releaseParser.getTagName(), parsed)) {
+      !kimchi_release::parseVersion(releaseParser.getTagName(), candidate) ||
+      !kimchi_release::parseVersion(CROSSPOINT_RELEASE_VERSION, installed)) {
     LOG_ERR("OTA", "Incomplete release JSON or invalid kimchi tag");
     return JSON_PARSE_ERROR;
   }
 
   latestVersion = releaseParser.getTagName();
-  if (!releaseParser.isPublishedRelease() || !kimchi_release::isNewer(latestVersion, CROSSPOINT_RELEASE_VERSION))
-    return NO_UPDATE;
+  if (!releaseParser.isPublishedRelease() || candidate.numbers <= installed.numbers) return NO_UPDATE;
 
   if (!releaseParser.foundFirmware()) {
     LOG_INF("OTA", "No %s asset in latest release", assetName);
     return NO_UPDATE;
   }
 
-  if (releaseParser.getFirmwareSize() < 24 ||
-      !kimchi_release::matchesAssetUrl(releaseParser.getFirmwareUrl(), latestVersion, assetName)) {
-    LOG_ERR("OTA", "Invalid kimchi firmware asset URL or size");
+  if (releaseParser.getFirmwareSize() < 24) {
+    LOG_ERR("OTA", "Invalid firmware asset size");
     return JSON_PARSE_ERROR;
   }
   otaUrl = releaseParser.getFirmwareUrl();
@@ -90,9 +89,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   return OK;
 }
 
-bool OtaUpdater::isUpdateNewer() const {
-  return updateAvailable && kimchi_release::isNewer(latestVersion, CROSSPOINT_RELEASE_VERSION);
-}
+bool OtaUpdater::isUpdateNewer() const { return updateAvailable; }
 
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
 

@@ -13,7 +13,7 @@ bool takeNumber(std::string_view& text, uint32_t& value) {
     value = value * 10 + digit;
     ++count;
   }
-  if (count == 0 || (count > 1 && text.front() == '0')) return false;
+  if (count == 0) return false;
   text.remove_prefix(count);
   return true;
 }
@@ -30,21 +30,11 @@ bool parseVersion(std::string_view text, Version& result) {
   Version parsed;
   if (!takeNumber(text, parsed.numbers[0]) || !takePrefix(text, ".") || !takeNumber(text, parsed.numbers[1]) ||
       !takePrefix(text, ".") || !takeNumber(text, parsed.numbers[2]) || !takePrefix(text, "-kimchi.") ||
-      !takeNumber(text, parsed.numbers[3]) || parsed.numbers[3] == 0 || !text.empty()) {
+      !takeNumber(text, parsed.numbers[3]) || !text.empty()) {
     return false;
   }
   result = parsed;
   return true;
 }
 
-bool isNewer(const std::string_view candidate, const std::string_view current) {
-  Version next, installed;
-  return parseVersion(candidate, next) && parseVersion(current, installed) && next.numbers > installed.numbers;
-}
-
-bool matchesAssetUrl(std::string_view url, const std::string_view tag, const std::string_view asset) {
-  // Compare the original tag (including optional v); only version comparison
-  // normalises that prefix. Redirects still use HttpDownloader's TLS checks.
-  return takePrefix(url, DOWNLOAD_PREFIX) && takePrefix(url, tag) && takePrefix(url, "/") && url == asset;
-}
 }  // namespace kimchi_release

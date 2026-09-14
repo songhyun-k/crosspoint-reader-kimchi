@@ -7,16 +7,13 @@
 namespace kimchi_release {
 
 inline constexpr char LATEST_URL[] = "https://api.github.com/repos/songhyun-k/crosspoint-reader-kimchi/releases/latest";
-inline constexpr char DOWNLOAD_PREFIX[] = "https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/";
 
-// Only published kimchi versions are accepted: [v]M.m.p-kimchi.N (N >= 1).
+// Release tag format: [v]M.m.p-kimchi.N.
 // Board/dev display suffixes never participate in this comparison.
 struct Version {
   std::array<uint32_t, 4> numbers{};
 };
 
 bool parseVersion(std::string_view text, Version& result);
-bool isNewer(std::string_view candidate, std::string_view current);
-bool matchesAssetUrl(std::string_view url, std::string_view tag, std::string_view asset);
 
 }  // namespace kimchi_release
