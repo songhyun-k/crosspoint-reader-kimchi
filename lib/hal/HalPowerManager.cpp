@@ -151,8 +151,17 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
     return _batteryCachedPercent;
   }
 
-  const bool isX4Adc = BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX4 && BoardConfig::ACTIVE.batteryAdc >= 0;
-  return battery_percent::smoothAdcSample(battery.readPercentage(), isX4Adc, _batteryCachedPercent);
+  uint16_t percent = battery.readPercentage();
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX4 && BoardConfig::ACTIVE.batteryAdc >= 0) {
+    percent = battery_percent::correctX4AdcSample(percent);
+  }
+  // smooth the battery %.
+  if (_batteryCachedPercent == 0) {
+    _batteryCachedPercent = 10 * percent;
+  } else {
+    _batteryCachedPercent = (_batteryCachedPercent * 9 + percent * 10) / 10;
+  }
+  return _batteryCachedPercent / 10;
 }
 
 HalPowerManager::Lock::Lock() {
