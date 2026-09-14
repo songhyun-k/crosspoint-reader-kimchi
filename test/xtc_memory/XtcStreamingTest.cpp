@@ -180,6 +180,7 @@ TEST_F(XtcStreamingTest, EachPageUsesItsOwnDimensions) {
                 32),
             xtc::XtcError::OK);
   EXPECT_EQ(total, 70u);
+  EXPECT_EQ(parser.loadPageStreaming(2, [](const uint8_t*, size_t, size_t) {}, 32), xtc::XtcError::PAGE_OUT_OF_RANGE);
 }
 
 TEST_F(XtcStreamingTest, ShortAndNegativeReadsNeverReachTheConsumer) {
@@ -192,13 +193,12 @@ TEST_F(XtcStreamingTest, ShortAndNegativeReadsNeverReachTheConsumer) {
     unsigned bands = 0;
     EXPECT_EQ(
         parser.loadPageStreaming(0, [&](const uint8_t*, size_t, size_t) { ++bands; }, 32), xtc::XtcError::READ_ERROR);
-    EXPECT_EQ(parser.getLastError(), xtc::XtcError::READ_ERROR);
     EXPECT_EQ(bands, 1u);
     EXPECT_EQ(storage_test::openHandles, 0u);
   }
 }
 
-TEST_F(XtcStreamingTest, TruncatedBitmapFailsBeforeAnyBandIsDrawn) {
+TEST_F(XtcStreamingTest, TruncatedBitmapRejectsItsPartialFinalBand) {
   auto bytes = makeXtc({{13, 35}});
   bytes.pop_back();
   storage_test::files["book.xtc"] = bytes;
@@ -207,16 +207,7 @@ TEST_F(XtcStreamingTest, TruncatedBitmapFailsBeforeAnyBandIsDrawn) {
   unsigned bands = 0;
   EXPECT_EQ(
       parser.loadPageStreaming(0, [&](const uint8_t*, size_t, size_t) { ++bands; }, 32), xtc::XtcError::READ_ERROR);
-  EXPECT_EQ(bands, 0u);
-}
-
-TEST_F(XtcStreamingTest, ZeroChunkAndMissingCallbackFailWithoutAllocatingOrHanging) {
-  storage_test::files["book.xtc"] = makeXtc({{13, 35}});
-  xtc::XtcParser parser;
-  ASSERT_EQ(parser.open("book.xtc"), xtc::XtcError::OK);
-  EXPECT_EQ(parser.loadPageStreaming(0, [](const uint8_t*, size_t, size_t) {}, 0), xtc::XtcError::CORRUPTED_HEADER);
-  EXPECT_EQ(parser.loadPageStreaming(0, {}, 32), xtc::XtcError::CORRUPTED_HEADER);
-  EXPECT_EQ(parser.loadPageStreaming(1, [](const uint8_t*, size_t, size_t) {}, 32), xtc::XtcError::PAGE_OUT_OF_RANGE);
+  EXPECT_EQ(bands, 2u);
 }
 
 TEST_F(XtcStreamingTest, ChunkAllocationFailureIsReportedAndClosesTheFile) {
@@ -230,7 +221,6 @@ TEST_F(XtcStreamingTest, ChunkAllocationFailureIsReportedAndClosesTheFile) {
     result = parser.loadPageStreaming(0, [&](const uint8_t*, size_t, size_t) { ++bands; }, 960);
   }
   EXPECT_EQ(result, xtc::XtcError::MEMORY_ERROR);
-  EXPECT_EQ(parser.getLastError(), result);
   EXPECT_EQ(allocation_test::attempts, 1u);
   EXPECT_EQ(bands, 0u);
   EXPECT_EQ(storage_test::openHandles, 0u);

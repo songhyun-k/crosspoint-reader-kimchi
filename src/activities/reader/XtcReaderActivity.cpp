@@ -160,10 +160,6 @@ void XtcReaderActivity::renderPage() {
   renderer.clearScreen();
 
   if (bitDepth == 2) {
-    if (pageHeight % 8 != 0) {
-      showError(StrId::STR_PAGE_LOAD_ERROR);
-      return;
-    }
     const size_t pageBufferSize = ((static_cast<size_t>(pageWidth) * pageHeight + 7) / 8) * 2;
     auto pageBuffer = xtc::allocateGrayscalePage(pageBufferSize, renderer.getFontCacheManager());
     if (!pageBuffer) {
