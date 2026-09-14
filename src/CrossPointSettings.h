@@ -2,6 +2,7 @@
 #include <ArduinoJson.h>
 #include <Epub/ReaderRenderSpec.h>
 #include <Epub/hyphenation/HyphenationConfig.h>
+#include <I18n.h>
 #include <PersistableStore.h>
 
 #include <cstdint>
@@ -319,8 +320,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Restore the saved on/off state after a normal boot or wake. Brightness and
   // warmth are always remembered even when this is disabled.
   uint8_t frontlightRestoreOnWake = 1;
-  // Language setting (Language enum index, default 0 = EN)
-  uint8_t language = 0;
+  // In-memory enum only; persisted as a stable code rather than this ordinal.
+  uint8_t language = static_cast<uint8_t>(I18n::DEFAULT_LANGUAGE);
   // Fixed QWERTY, using upstream's persisted English bit (bit 0). Older masks
   // are normalised on load; input selection never consults this legacy field.
   uint16_t keyboardLayouts = 1;

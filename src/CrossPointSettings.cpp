@@ -104,7 +104,7 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
 
   // Language -- managed by LanguageSelectActivity, not in SettingsList.
   // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
-  doc["language"] = (language < getLanguageCount()) ? LANGUAGE_CODES[language] : "EN";
+  doc["language"] = I18n::languageToCode(static_cast<Language>(language));
 
 #if !CP_HYPHENATION_LANGS
   // Keep saved/manual settings truthful even though the unavailable toggle is hidden.
@@ -228,7 +228,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
 
   // Language -- stored as code string for stability across enum reorders.
   if (doc["language"].is<const char*>()) {
-    language = static_cast<uint8_t>(I18n::languageFromCode(doc["language"].as<const char*>()));
+    const char* code = doc["language"].as<const char*>();
+    language = static_cast<uint8_t>(I18n::languageFromCode(code));
+    if (strcmp(code, I18n::languageToCode(static_cast<Language>(language))) != 0) needsResave = true;
+  } else {
+    language = static_cast<uint8_t>(I18n::DEFAULT_LANGUAGE);
   }
 
   if (!doc["keyboardLayouts"].isNull() && (doc["keyboardLayouts"] | uint16_t{0}) != keyboard_layouts::FIXED_MASK) {

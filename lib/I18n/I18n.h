@@ -1,14 +1,15 @@
 #pragma once
 
-#include <cstdint>
+#include <I18nKeys.h>
 
-#include "I18nKeys.h"
+#include <cstdint>
 /**
  * Internationalization (i18n) system for CrossPoint Reader
  */
 
 class I18n {
  public:
+  static constexpr Language DEFAULT_LANGUAGE = Language::KO;
   static I18n& getInstance();
 
   // Disable copy
@@ -24,13 +25,14 @@ class I18n {
   void setLanguage(Language lang);
   const char* getLanguageName(Language lang) const;
   static Language languageFromCode(const char* code);
+  static const char* languageToCode(Language language);
 
   // Get all unique characters used in a specific language
   // Returns a sorted string of unique characters
   static const char* getCharacterSet(Language lang);
 
  private:
-  I18n() : _language(Language::EN) {}
+  I18n() : _language(DEFAULT_LANGUAGE) {}
 
   Language _language;
 };
