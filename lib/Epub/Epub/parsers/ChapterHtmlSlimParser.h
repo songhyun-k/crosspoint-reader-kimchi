@@ -30,7 +30,6 @@ class ChapterHtmlSlimParser {
   std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)> completePageFn;
   std::function<void()> popupFn;  // Popup callback
   bool imagePopupFired = false;   // popupFn fired for the first image probe (single-shot)
-  bool layoutFailed_ = false;
   int depth = 0;
   int skipUntilDepth = INT_MAX;
   int boldUntilDepth = INT_MAX;

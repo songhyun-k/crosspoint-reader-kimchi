@@ -679,11 +679,11 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
   return 0;
 }
 // Consumes data to minimize memory usage
-bool ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fontId, const uint16_t viewportWidth,
+void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fontId, const uint16_t viewportWidth,
                                        const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
                                        const bool includeLastLine) {
   if (words.empty()) {
-    return true;
+    return;
   }
 
   // Per-paragraph RTL auto-detection: only when CSS/HTML didn't explicitly set direction.
@@ -734,21 +734,18 @@ bool ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   } else {
     lineBreakIndices = computeLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore);
   }
-  if (lineBreakIndices.empty()) return true;
+  if (lineBreakIndices.empty()) return;
   const size_t lineCount = includeLastLine ? lineBreakIndices.size() : lineBreakIndices.size() - 1;
 
-  size_t emittedLines = 0;
   for (size_t i = 0; i < lineCount; ++i) {
-    if (!extractLine(i, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore, lineBreakIndices, processLine,
-                     renderer, fontId))
-      break;
-    ++emittedLines;
+    extractLine(i, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore, lineBreakIndices, processLine, renderer,
+                fontId);
   }
 
   // Remove consumed words so size() reflects only remaining words
-  if (emittedLines > 0) {
+  if (lineCount > 0) {
     firstLineEmitted = true;
-    const size_t consumed = lineBreakIndices[emittedLines - 1];
+    const size_t consumed = lineBreakIndices[lineCount - 1];
     words.erase(words.begin(), words.begin() + consumed);
     wordStyles.erase(wordStyles.begin(), wordStyles.begin() + consumed);
     wordContinues.erase(wordContinues.begin(), wordContinues.begin() + consumed);
@@ -761,7 +758,6 @@ bool ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
       rubyTexts.erase(rubyTexts.begin(), rubyTexts.begin() + rtConsumed);
     }
   }
-  return emittedLines == lineCount;
 }
 
 static inline bool isCjkIdeograph(uint32_t cp) {
@@ -1285,7 +1281,7 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
   return true;
 }
 
-bool ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const std::vector<uint16_t>& wordWidths,
+void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const std::vector<uint16_t>& wordWidths,
                              const std::vector<bool>& continuesVec, const std::vector<bool>& noSpaceBeforeVec,
                              const std::vector<size_t>& lineBreakIndices,
                              const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
@@ -1313,9 +1309,7 @@ bool ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   lineWordStyles.reserve(lineWordCount);
 
   for (size_t i = 0; i < lineWordCount; ++i) {
-    // Keep source until the line's arena exists. Only this line is copied, not
-    // the paragraph; a soft flush never consumes its suppressed trailing line.
-    std::string word = words[lastBreakAt + i];
+    std::string word = std::move(words[lastBreakAt + i]);
     if (containsSoftHyphen(word)) {
       stripSoftHyphensInPlace(word);
     }
@@ -1650,11 +1644,11 @@ bool ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
                                              std::vector<uint16_t>{}, blockStyle, std::move(lineRubyTexts),
                                              std::move(lineLinks));
     if (!block->valid()) {
-      LOG_ERR("PTX", "Retaining source: TextBlock arena allocation failed");
-      return false;
+      LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
+      return;
     }
     processLine(std::move(block), lineVisibleOffset);
-    return true;
+    return;
   }
 
   // Each word is one TextBlock entry carrying its own boundary; all that remains is the suffix x
@@ -1673,9 +1667,8 @@ bool ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   auto block = std::make_shared<TextBlock>(lineWords, lineXPos, lineWordStyles, outBoundaries, outSuffixX, blockStyle,
                                            std::move(lineRubyTexts), std::move(lineLinks));
   if (!block->valid()) {
-    LOG_ERR("PTX", "Retaining source: TextBlock arena allocation failed");
-    return false;
+    LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
+    return;
   }
   processLine(std::move(block), lineVisibleOffset);
-  return true;
 }

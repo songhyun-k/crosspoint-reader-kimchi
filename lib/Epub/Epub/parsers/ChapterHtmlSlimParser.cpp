@@ -419,7 +419,6 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   flushPendingAnchor();
   currentTextBlock = makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled,
                                                    blockStyle, characterWrap, paragraphIndent);
-  if (!currentTextBlock) layoutFailed_ = true;
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
 }
@@ -598,18 +597,15 @@ void ChapterHtmlSlimParser::finishTableRow() {
     if (lines.capacity() < MAX_GRID_TABLE_CELL_WORDS * 2) {
       lines.reserve(MAX_GRID_TABLE_CELL_WORDS * 2);
     }
-    if (!tableRowCells[column]->layoutAndExtractLines(
-            renderer, fontId, textWidth, [this, &lines](const std::shared_ptr<TextBlock>& line, const uint32_t offset) {
-              const size_t lineIndex = lines.size();
-              lines.push_back(line);
-              if (tableLineVisibleOffsets.size() <= lineIndex) {
-                tableLineVisibleOffsets.resize(lineIndex + 1, UINT32_MAX);
-              }
-              tableLineVisibleOffsets[lineIndex] = std::min(tableLineVisibleOffsets[lineIndex], offset);
-            })) {
-      layoutFailed_ = true;
-      return;
-    }
+    tableRowCells[column]->layoutAndExtractLines(
+        renderer, fontId, textWidth, [this, &lines](const std::shared_ptr<TextBlock>& line, const uint32_t offset) {
+          const size_t lineIndex = lines.size();
+          lines.push_back(line);
+          if (tableLineVisibleOffsets.size() <= lineIndex) {
+            tableLineVisibleOffsets.resize(lineIndex + 1, UINT32_MAX);
+          }
+          tableLineVisibleOffsets[lineIndex] = std::min(tableLineVisibleOffsets[lineIndex], offset);
+        });
     maxLineCount = std::max(maxLineCount, lines.size());
   }
   tableRowCells.clear();
@@ -1394,7 +1390,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->startNewTextBlock(accumulated.withoutBottom());
       self->updateEffectiveInlineStyle();
 
-      if (strcmp(name, "li") == 0) {
+      if (strcmp(name, "li") == 0 && self->currentTextBlock) {
         self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR, false, false, self->visibleTextOffset);
         self->listItemBulletOnly = true;
       }
@@ -1732,13 +1728,12 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
                                         ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
                                         : self->viewportWidth;
-    if (!self->currentTextBlock->layoutAndExtractLines(
-            self->renderer, self->fontId, effectiveWidth,
-            [self](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) {
-              self->addLineToPage(textBlock, offset);
-            },
-            false))
-      self->layoutFailed_ = true;
+    self->currentTextBlock->layoutAndExtractLines(
+        self->renderer, self->fontId, effectiveWidth,
+        [self](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) {
+          self->addLineToPage(textBlock, offset);
+        },
+        false);
   }
 }
 
@@ -1977,7 +1972,6 @@ ChapterHtmlSlimParser::~ChapterHtmlSlimParser() { abortParse(); }
 
 bool ChapterHtmlSlimParser::beginParse() {
   htmlEnded_ = false;
-  layoutFailed_ = false;
   // Initialize block style stack with a root entry representing "no ancestor block elements".
   // The user's paragraph alignment is set as the default so child elements without explicit
   // text-align inherit it correctly through getCombinedBlockStyle.
@@ -2051,12 +2045,7 @@ ChapterHtmlSlimParser::ParseStatus ChapterHtmlSlimParser::parseStep() {
 
   const int done = parseFile_.available() == 0;
 
-  const auto status = XML_ParseBuffer(xmlParser_, static_cast<int>(len), done);
-  if (layoutFailed_) {
-    LOG_ERR("EHP", "Text layout failed; do not finalize a cache with missing text");
-    return ParseStatus::Error;
-  }
-  if (status == XML_STATUS_ERROR) {
+  if (XML_ParseBuffer(xmlParser_, static_cast<int>(len), done) == XML_STATUS_ERROR) {
     if (htmlEnded_) {
       LOG_DBG("EHP", "Ignoring trailing data after </html>: %s", XML_ErrorString(XML_GetErrorCode(xmlParser_)));
       return ParseStatus::Done;
@@ -2081,7 +2070,6 @@ void ChapterHtmlSlimParser::abortParse() {
 }
 
 bool ChapterHtmlSlimParser::finishParse() {
-  if (layoutFailed_) return false;
   if (xmlParser_) {
     LOG_DBG("EHP", "Time to parse and build pages: %lu ms", millis() - parseStartTime_);
     destroyXmlParser(xmlParser_);
@@ -2092,7 +2080,6 @@ bool ChapterHtmlSlimParser::finishParse() {
   // Process last page if there is still text
   if (currentTextBlock) {
     makePages();
-    if (layoutFailed_) return false;
     if (!pendingAnchorId.empty()) {
       anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
       pendingAnchorId.clear();
@@ -2196,13 +2183,9 @@ void ChapterHtmlSlimParser::makePages() {
   const uint16_t effectiveWidth =
       (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
 
-  if (!currentTextBlock->layoutAndExtractLines(
-          renderer, fontId, effectiveWidth, [this](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) {
-            addLineToPage(textBlock, offset);
-          })) {
-    layoutFailed_ = true;
-    return;
-  }
+  currentTextBlock->layoutAndExtractLines(
+      renderer, fontId, effectiveWidth,
+      [this](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) { addLineToPage(textBlock, offset); });
 
   // Fallback: transfer any remaining pending footnotes to current page.
   // Normally addLineToPage handles this via word-index tracking, but this catches

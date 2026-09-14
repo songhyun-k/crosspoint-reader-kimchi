@@ -53,8 +53,8 @@ class KoreanLayoutTest : public testing::Test {
     renderer.setOrientation(GfxRenderer::LandscapeCounterClockwise);
   }
   void TearDown() override { failNextArray = false; }
-  bool layout(ParsedText& text, uint16_t width, bool last = true) {
-    return text.layoutAndExtractLines(
+  void layout(ParsedText& text, uint16_t width, bool last = true) {
+    text.layoutAndExtractLines(
         renderer, 1, width,
         [this](std::shared_ptr<TextBlock> block, uint32_t offset) { lines.push_back({std::move(block), offset}); },
         last);
@@ -96,12 +96,12 @@ TEST_F(KoreanLayoutTest, RepeatedSuppressedTrailingLinesRetainEverySourceCharact
   text.addWord("한글문단", B, false, false, 65530);
   const size_t tokens = text.size();
   for (int i = 0; i < 8; ++i) {
-    ASSERT_TRUE(layout(text, 480, false));
+    layout(text, 480, false);
     EXPECT_EQ(text.size(), tokens);
     EXPECT_TRUE(lines.empty());
   }
   text.addWord("이어짐", R, false, true, 65534);
-  ASSERT_TRUE(layout(text, 480));
+  layout(text, 480);
   EXPECT_EQ(contents(lines), "한글문단이어짐");
   ASSERT_EQ(lines.size(), 1u);
   EXPECT_EQ(lines.front().offset, 65530u);
@@ -120,11 +120,11 @@ TEST_F(KoreanLayoutTest, ThousandsOfChunkedKoreanTokensDoNotDisappearOrDuplicate
     text.addWord(part, chunk % 2 ? B : R, false, true, offset);
     const auto* cursor = reinterpret_cast<const uint8_t*>(part.c_str());
     while (utf8NextCodepoint(&cursor)) ++offset;
-    ASSERT_TRUE(layout(text, 173, false));
+    layout(text, 173, false);
     ASSERT_FALSE(text.isEmpty());
     EXPECT_LE(text.size(), 8u);
   }
-  ASSERT_TRUE(layout(text, 173));
+  layout(text, 173);
   EXPECT_EQ(contents(lines), expected);
   for (size_t i = 1; i < lines.size(); ++i) EXPECT_GT(lines[i].offset, lines[i - 1].offset);
 }
@@ -132,7 +132,7 @@ TEST_F(KoreanLayoutTest, ThousandsOfChunkedKoreanTokensDoNotDisappearOrDuplicate
 TEST_F(KoreanLayoutTest, GluedCjkHasNoInsertedSpacingButRealGapsReachTheRightEdge) {
   ParsedText text(true, false, false, zeroIndent(), true);
   for (int i = 0; i < 15; ++i) text.addWord("가나다", R, false, false, i * 4);
-  ASSERT_TRUE(layout(text, 227));
+  layout(text, 227);
   ASSERT_GT(lines.size(), 1u);
   const auto& block = *lines[0].block;
   for (uint16_t i = 1; i < block.wordCount(); ++i) {
@@ -151,7 +151,7 @@ TEST_F(KoreanLayoutTest, TurningCharacterWrapOffRestoresUpstreamCjkGapExpansion)
     lines.clear();
     ParsedText text(true, false, false, zeroIndent(), enabled);
     text.addWord(source, R);
-    ASSERT_TRUE(layout(text, natural * 3 + 11));
+    layout(text, natural * 3 + 11);
     ASSERT_GT(lines.size(), 1u);
     const auto& first = *lines[0].block;
     ASSERT_GT(first.wordCount(), 1);
@@ -169,7 +169,7 @@ TEST_F(KoreanLayoutTest, NonJustifiedAlignmentDoesNotUseTheKoreanLayoutMode) {
     lines.clear();
     ParsedText text(true, false, false, zeroIndent(CssTextAlign::Left), enabled);
     text.addWord("가나다라마바사아자차카타파하", R);
-    ASSERT_TRUE(layout(text, 110));
+    layout(text, 110);
     std::vector<int16_t> positions;
     for (const auto& line : lines) {
       for (uint16_t i = 0; i < line.block->wordCount(); ++i) positions.push_back(line.block->wordXpos(i));
@@ -185,9 +185,9 @@ TEST_F(KoreanLayoutTest, SettingChangesJustifiedLatinCharacterFillingWithoutInse
   const std::string source = "ABCDEFGH";
   ParsedText text(true, false, false, zeroIndent(), true);
   text.addWord(source, R);
-  ASSERT_TRUE(layout(text, renderer.getTextAdvanceX(1, "ABC", R) + 1, false));
+  layout(text, renderer.getTextAdvanceX(1, "ABC", R) + 1, false);
   ASSERT_FALSE(lines.empty());
-  ASSERT_TRUE(layout(text, 300));
+  layout(text, 300);
   EXPECT_EQ(contents(lines), source);
   for (const auto& line : lines) EXPECT_EQ(contents({line}).find('-'), std::string::npos);
   ReaderRenderSpec before;
@@ -201,16 +201,16 @@ TEST_F(KoreanLayoutTest, SettingChangesJustifiedLatinCharacterFillingWithoutInse
   EXPECT_NE(key, changed);
 }
 
-TEST_F(KoreanLayoutTest, FailedArenaDoesNotConsumeTheLineAndCanBeRetried) {
+TEST_F(KoreanLayoutTest, ArenaFailureDoesNotEmitAnInvalidBlock) {
   ParsedText text(true, false, false, zeroIndent(), true);
   text.addWord("한글문단", R);
-  const size_t size = text.size();
   failNextArray = true;
-  EXPECT_FALSE(layout(text, 480));
+  layout(text, 480);
   EXPECT_TRUE(lines.empty());
-  EXPECT_EQ(text.size(), size);
-  ASSERT_TRUE(layout(text, 480));
-  EXPECT_EQ(contents(lines), "한글문단");
+  EXPECT_TRUE(text.isEmpty());  // Upstream drops a line when its arena cannot be allocated.
+  text.addWord("다음문단", R);
+  layout(text, 480);
+  EXPECT_EQ(contents(lines), "다음문단");
 }
 
 TEST_F(KoreanLayoutTest, LinksFocusStylesRubyAndTextBlockCacheSurviveLineExtraction) {
@@ -219,9 +219,9 @@ TEST_F(KoreanLayoutTest, LinksFocusStylesRubyAndTextBlockCacheSurviveLineExtract
   text.addWord("한글", B, false, false, 100, link);
   text.setRubyGroupAt(0, text.size(), "한국어");
   text.addWord("reading", R, false, false, 103);
-  ASSERT_TRUE(layout(text, 480, false));
+  layout(text, 480, false);
   EXPECT_TRUE(lines.empty());
-  ASSERT_TRUE(layout(text, 480));
+  layout(text, 480);
   ASSERT_EQ(lines.size(), 1u);
   auto& block = *lines[0].block;
   EXPECT_TRUE(block.hasRuby());
@@ -269,11 +269,6 @@ TEST_F(KoreanLayoutTest, RealXmlParserKeepsRubyAndGridTableText) {
             480));
   EXPECT_EQ(contents(lines), "漢字본문왼쪽오른쪽하나둘마지막");
   EXPECT_TRUE(std::any_of(lines.begin(), lines.end(), [](const Line& line) { return line.block->hasRuby(); }));
-}
-
-TEST_F(KoreanLayoutTest, RealXmlParserReportsAllocationFailureInsteadOfCompletingMissingText) {
-  failNextArray = true;
-  EXPECT_FALSE(parse("<p>원문을 잃으면 안 됩니다.</p>"));
 }
 
 TEST_F(KoreanLayoutTest, RealSectionCacheRebuildsOnSettingChangeAndKeepsVisiblePositionLookups) {
@@ -346,22 +341,6 @@ TEST_F(KoreanLayoutTest, RealPartialCacheAlsoRejectsAChangedCharacterWrapSetting
   EXPECT_FALSE(reopened.loadSectionFile(spec));
 }
 
-TEST_F(KoreanLayoutTest, XmlSectionNeverFinalizesAfterTextArenaFailure) {
-  const std::string html = "<html><body><p>메모리 실패에도 원문은 보존되어야 합니다</p></body></html>";
-  storage_test::files["cache/html/0.html"] = std::vector<uint8_t>(html.begin(), html.end());
-  ReaderRenderSpec spec;
-  spec.fontId = 1;
-  spec.viewportWidth = 227;
-  spec.viewportHeight = 160;
-  Section section(std::make_shared<Epub>(), 0, renderer);
-  ASSERT_TRUE(section.startBuild(spec));
-  failNextArray = true;
-  EXPECT_FALSE(section.buildSomeMore(0));
-  EXPECT_FALSE(section.isBuildComplete());
-  EXPECT_FALSE(Storage.exists("cache/sections/0.bin"));
-  EXPECT_FALSE(Storage.exists("cache/sections/0.bin.part"));
-}
-
 TEST_F(KoreanLayoutTest, ParagraphIndentDefaultsOffAndIsIndependentOfParagraphSpacing) {
   EXPECT_FALSE(ReaderRenderSpec{}.paragraphIndent);
   const int indentWidth = renderer.getTextAdvanceX(1, "\xE3\x80\x80", R);
@@ -372,7 +351,7 @@ TEST_F(KoreanLayoutTest, ParagraphIndentDefaultsOffAndIsIndependentOfParagraphSp
         lines.clear();
         ParsedText text(spacing, false, false, BlockStyle{}, wrap, indent);
         text.addWord("가나다라마바사아자차카타파하", R);
-        ASSERT_TRUE(layout(text, 125));
+        layout(text, 125);
         ASSERT_GT(lines.size(), 1u);
         EXPECT_EQ(lines[0].block->wordXpos(0), indent ? indentWidth : 0);
         for (size_t i = 1; i < lines.size(); ++i) EXPECT_EQ(lines[i].block->wordXpos(0), 0);
@@ -391,7 +370,7 @@ TEST_F(KoreanLayoutTest, ExplicitCssZeroPositiveAndHangingIndentNeverDoubleWithU
         style.textIndent = css;
         ParsedText text(spacing, false, false, style, true, indent);
         text.addWord("가나다라마바사아자차카타파하", R);
-        ASSERT_TRUE(layout(text, 125));
+        layout(text, 125);
         ASSERT_GT(lines.size(), 1u);
         EXPECT_EQ(lines[0].block->wordXpos(0), css);
         EXPECT_EQ(lines[1].block->wordXpos(0), 0);
@@ -404,13 +383,13 @@ TEST_F(KoreanLayoutTest, SoftFlushDoesNotRepeatIndentOrChangeVisibleOffsets) {
   ParsedText text(false, false, false, BlockStyle{}, true, true);
   const int indentWidth = renderer.getTextAdvanceX(1, "\xE3\x80\x80", R);
   text.addWord("가나다", R, false, false, 1200);
-  ASSERT_TRUE(layout(text, 480, false));
+  layout(text, 480, false);
   ASSERT_TRUE(lines.empty());
   for (int i = 0; i < 25; ++i) {
     text.addWord("라마바사아자", R, false, true, 1203 + i * 6);
-    ASSERT_TRUE(layout(text, 125, false));
+    layout(text, 125, false);
   }
-  ASSERT_TRUE(layout(text, 125));
+  layout(text, 125);
   ASSERT_GT(lines.size(), 20u);
   EXPECT_EQ(lines[0].block->wordXpos(0), indentWidth);
   EXPECT_EQ(lines[0].offset, 1200u);
@@ -418,7 +397,7 @@ TEST_F(KoreanLayoutTest, SoftFlushDoesNotRepeatIndentOrChangeVisibleOffsets) {
   lines.clear();
   text.setBlockStyle(BlockStyle{});  // empty parser object reused for the next paragraph
   text.addWord("새문단", R, false, false, 1500);
-  ASSERT_TRUE(layout(text, 480));
+  layout(text, 480);
   EXPECT_EQ(lines[0].block->wordXpos(0), indentWidth);
   EXPECT_EQ(lines[0].offset, 1500u);
 }
