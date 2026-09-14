@@ -92,6 +92,15 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 48
+
+Adds the one-byte `characterWrap` layout flag after `focusReadingEnabled` in
+the header, increasing it by one byte. Every LUT/header patch position is
+derived from `HEADER_SIZE`. Complete and partial caches must match this flag.
+Korean character-wrap reuses the original text/metadata arenas: glued CJK
+tokens have no extra word gap, real spaces share justification remainder pixels,
+and a soft flush retains its entire un-emitted trailing line.
+
 ### Version 47
 
 Version 47 preserves the version 46 serialized layout and invalidates old word

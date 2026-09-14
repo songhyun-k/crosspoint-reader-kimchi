@@ -25,7 +25,7 @@ namespace {
 constexpr StrId TAB_NAME_IDS[] = {StrId::STR_FONT, StrId::STR_SIZE, StrId::STR_LAYOUT, StrId::STR_STYLE};
 
 constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING, StrId::STR_ALIGNMENT,
-                                         StrId::STR_SCREEN_MARGIN};
+                                         StrId::STR_SCREEN_MARGIN, StrId::STR_CHARACTER_WRAP};
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING,
 #if CP_HYPHENATION_LANGS
                                         StrId::STR_HYPHENATION,
@@ -373,6 +373,11 @@ void TextSettingsActivity::applySize(int listIndex) {
 
 void TextSettingsActivity::confirmLayoutRow(int row) {
   switch (static_cast<LayoutRow>(row)) {
+    case LayoutRow::CharacterWrap:
+      SETTINGS.characterWrap = !SETTINGS.characterWrap;
+      SETTINGS.saveToFile();
+      requestUpdate();
+      break;
     case LayoutRow::ParaSpacing:
       SETTINGS.extraParagraphSpacing = !SETTINGS.extraParagraphSpacing;
       SETTINGS.saveToFile();
@@ -414,6 +419,8 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
 
 std::string TextSettingsActivity::layoutValueText(int row) const {
   switch (static_cast<LayoutRow>(row)) {
+    case LayoutRow::CharacterWrap:
+      return SETTINGS.characterWrap ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     case LayoutRow::LineSpacing: {
       const uint8_t v = SETTINGS.lineSpacing;
       return v < std::size(LINE_SPACING_IDS) ? I18N.get(LINE_SPACING_IDS[v]) : I18N.get(StrId::STR_NORMAL);
