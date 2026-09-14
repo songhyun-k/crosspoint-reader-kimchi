@@ -43,7 +43,7 @@ reader, web manager, installer, or Text Settings paths with KO's `.epdfont`.
 
 `cpfont_version.py` derives `sd-fonts-m<M>-b<B>` and the kimchi base URL from the
 actual manifest/binary versions. The firmware uses the same values through
-`src/FontManifest.h`; regression tests compare the constants. With M=1 and B=4:
+`src/activities/settings/FontDownloadActivity.h`; regression tests compare the constants. With M=1 and B=4:
 
 `https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/sd-fonts-m1-b4/fonts.json`
 

@@ -4,9 +4,25 @@
 #include <vector>
 
 #include "FontInstaller.h"
-#include "FontManifest.h"
 #include "SdCardFont.h"
 #include "activities/UiListActivity.h"
+
+// JSON schema version of the fonts.json manifest. The canonical version for
+// the build tooling lives in lib/EpdFont/scripts/cpfont_version.py. This
+// firmware-side copy must be bumped manually when the firmware is updated to
+// support a new manifest schema.
+#define FONTS_MANIFEST_VERSION 1
+
+#ifndef FONT_MANIFEST_URL
+// kimchi manifest and .cpfont asset URLs use the
+// "sd-fonts-m<META>-b<BIN>" tag. Keep the tag pattern in sync with
+// lib/EpdFont/scripts/cpfont_version.py.
+#define FONT_MANIFEST_URL_STRINGIFY_INNER(x) #x
+#define FONT_MANIFEST_URL_STRINGIFY(x) FONT_MANIFEST_URL_STRINGIFY_INNER(x)
+#define FONT_MANIFEST_URL                                                                                            \
+  "https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/sd-fonts-m" FONT_MANIFEST_URL_STRINGIFY( \
+      FONTS_MANIFEST_VERSION) "-b" FONT_MANIFEST_URL_STRINGIFY(CPFONT_VERSION) "/fonts.json"
+#endif
 
 class FontDownloadActivity final : public UiListActivity {
  public:

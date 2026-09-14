@@ -91,7 +91,7 @@ class KoreanFontCatalogTest(unittest.TestCase):
 
     def test_firmware_version_macros_match_the_generator(self):
         font = (ROOT / "lib/EpdFont/SdCardFont.h").read_text()
-        manifest = (ROOT / "src/FontManifest.h").read_text()
+        manifest = (ROOT / "src/activities/settings/FontDownloadActivity.h").read_text()
         self.assertEqual(int(re.search(r"#define CPFONT_VERSION (\d+)", font)[1]), CPFONT_VERSION)
         self.assertEqual(int(re.search(r"#define FONTS_MANIFEST_VERSION (\d+)", manifest)[1]), FONTS_MANIFEST_VERSION)
 
