@@ -6,7 +6,6 @@
 #include <cassert>
 #include <vector>
 
-#include "../TokenBoundary.h"
 #include "HyphenationCommon.h"
 #include "LanguageHyphenator.h"
 #include "LanguageRegistry.h"
@@ -73,10 +72,7 @@ std::vector<Hyphenator::BreakInfo> buildExplicitBreakInfos(const std::vector<Cod
 
   for (size_t i = 1; i + 1 < cps.size(); ++i) {
     const uint32_t cp = cps[i].value;
-    // Use the same visible-separator contract as tokenization; U+2011 is a
-    // hyphen character but not a legal explicit break. Soft hyphens are conditional.
-    if (!(isSoftHyphen(cp) || TokenBoundary::allowsBreakAfterExplicitHyphen(cp)) || !isAlphabetic(cps[i - 1].value) ||
-        !isAlphabetic(cps[i + 1].value)) {
+    if (!isExplicitHyphen(cp) || !isAlphabetic(cps[i - 1].value) || !isAlphabetic(cps[i + 1].value)) {
       continue;
     }
     // Offset points to the next codepoint so rendering starts after the hyphen marker.

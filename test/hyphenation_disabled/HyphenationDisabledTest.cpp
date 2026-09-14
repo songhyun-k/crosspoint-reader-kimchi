@@ -2,7 +2,6 @@
 #include <gtest/gtest.h>
 
 #include "lib/Epub/Epub/TokenBoundary.h"
-#include "lib/Epub/Epub/hyphenation/HyphenationConfig.h"
 #include "lib/Epub/Epub/hyphenation/Hyphenator.h"
 #include "lib/Epub/Epub/hyphenation/LanguageRegistry.h"
 
@@ -16,11 +15,6 @@ TEST(HyphenationDisabledTest, RegistryContainsNoLanguages) {
   for (const char* tag : {"en", "fr", "de", "ru", "es", "it", "pl", "sv", "uk", "fi", "ko"}) {
     EXPECT_EQ(getLanguageHyphenatorForPrimaryTag(tag), nullptr) << tag;
   }
-}
-
-TEST(HyphenationDisabledTest, StaleEnabledSettingCannotEnablePatterns) {
-  EXPECT_FALSE(effectiveHyphenationEnabled(false));
-  EXPECT_FALSE(effectiveHyphenationEnabled(true));
 }
 
 TEST(HyphenationDisabledTest, DoesNotProduceLanguagePatternBreaks) {
@@ -40,14 +34,18 @@ TEST(HyphenationDisabledTest, KeepsVisibleExplicitHyphens) {
   EXPECT_TRUE(TokenBoundary::allowsBreakAfterExplicitHyphen('-'));
 }
 
-TEST(HyphenationDisabledTest, KeepsSoftHyphenConditionalAndNonbreakingHyphenUnbreakable) {
+TEST(HyphenationDisabledTest, KeepsTheUpstreamExplicitHyphenContract) {
   const auto breaks = Hyphenator::breakOffsets("hy\u00ADphenation", false);
   ASSERT_EQ(breaks.size(), 1u);
   EXPECT_EQ(breaks.front().byteOffset, 4u);
   EXPECT_TRUE(breaks.front().requiresInsertedHyphen);
   EXPECT_FALSE(TokenBoundary::allowsBreakAfterExplicitHyphen(0x00AD));
   EXPECT_FALSE(TokenBoundary::allowsBreakAfterExplicitHyphen(0x2011));
-  EXPECT_TRUE(Hyphenator::breakOffsets("non\u2011breaking", false).empty());
+  // Preserve upstream's differing token-boundary and explicit-hyphen policies.
+  const auto nonbreaking = Hyphenator::breakOffsets("non\u2011breaking", false);
+  ASSERT_EQ(nonbreaking.size(), 1u);
+  EXPECT_EQ(nonbreaking.front().byteOffset, 6u);
+  EXPECT_FALSE(nonbreaking.front().requiresInsertedHyphen);
 }
 
 TEST(HyphenationDisabledTest, RetainsEmergencyBreaksForOversizedWords) {

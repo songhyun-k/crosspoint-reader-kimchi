@@ -240,7 +240,6 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   keyboardLayouts = keyboard_layouts::FIXED_MASK;
 
 #if !CP_HYPHENATION_LANGS
-  if ((doc["hyphenationEnabled"] | 0) != 0) needsResave = true;
   hyphenationEnabled = 0;
 #endif
 

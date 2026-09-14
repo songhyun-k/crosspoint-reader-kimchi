@@ -259,7 +259,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // E-ink refresh frequency (default 15 pages)
   uint8_t refreshFrequency = REFRESH_15;
   uint8_t hyphenationEnabled = 0;
-  bool isHyphenationEnabled() const { return effectiveHyphenationEnabled(hyphenationEnabled != 0); }
+  bool isHyphenationEnabled() const { return CP_HYPHENATION_LANGS != 0 && hyphenationEnabled != 0; }
 
   // Reader screen margin settings
   static constexpr uint8_t SCREEN_MARGIN_MIN = 5;

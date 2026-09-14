@@ -10,7 +10,6 @@
 
 #include "blocks/BlockStyle.h"
 #include "blocks/TextBlock.h"
-#include "hyphenation/HyphenationConfig.h"
 
 class GfxRenderer;
 
@@ -102,7 +101,7 @@ class ParsedText {
                       const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle(),
                       const bool characterWrap = false, const bool paragraphIndent = false)
       : blockStyle(blockStyle),
-        hyphenationEnabled(effectiveHyphenationEnabled(hyphenationEnabled)),
+        hyphenationEnabled(hyphenationEnabled),
         focusReadingEnabled(focusReadingEnabled),
         characterWrap(characterWrap),
         paragraphIndent(paragraphIndent),
