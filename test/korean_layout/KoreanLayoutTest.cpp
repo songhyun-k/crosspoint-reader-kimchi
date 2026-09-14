@@ -411,10 +411,12 @@ TEST_F(KoreanLayoutTest, InlineCssIndentWorksWithoutAnExternalStylesheetAndRespe
   for (const int indent : {0, 17, -7}) {
     for (const bool styles : {true, false}) {
       lines.clear();
-      const std::string html = "<p style='text-indent:" + std::to_string(indent) + "px'>한글문단</p>";
+      const std::string html = "<p style='text-indent:" + std::to_string(indent) +
+                               "px;display:none;font-weight:bold;text-align:right;margin-left:50px'>한글문단</p>";
       ASSERT_TRUE(parse(html, 480, 800, true, true, styles));
       ASSERT_EQ(lines.size(), 1u);
       EXPECT_EQ(lines[0].block->wordXpos(0), styles ? indent : renderer.getTextAdvanceX(1, "\xE3\x80\x80", R));
+      EXPECT_EQ(lines[0].block->wordStyle(0), R);
     }
   }
 }

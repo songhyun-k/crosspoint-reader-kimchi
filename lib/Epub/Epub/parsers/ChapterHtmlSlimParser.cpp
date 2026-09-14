@@ -750,12 +750,16 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   CssStyle cssStyle;
   if (self->cssParser) {
     cssStyle = self->cssParser->resolveStyle(name, classAttr);
-  }
-  // Inline styles do not require an external stylesheet/cache. In particular,
-  // an explicit text-indent:0 must suppress the user's paragraph indent.
-  if (self->embeddedStyle && !styleAttr.empty()) {
-    CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);
-    cssStyle.applyOver(inlineStyle);
+    if (!styleAttr.empty()) {
+      CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);
+      cssStyle.applyOver(inlineStyle);
+    }
+  } else if (self->embeddedStyle && !styleAttr.empty()) {
+    // Honor explicit paragraph indent even without a stylesheet, without
+    // enabling unrelated inline CSS that upstream ignores in this case.
+    const CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);
+    cssStyle.textIndent = inlineStyle.textIndent;
+    cssStyle.defined.textIndent = inlineStyle.defined.textIndent;
   }
 
   // HTML dir attribute overrides CSS direction (case-insensitive per HTML spec)
