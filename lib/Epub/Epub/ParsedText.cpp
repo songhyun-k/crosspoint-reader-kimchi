@@ -734,7 +734,6 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   } else {
     lineBreakIndices = computeLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore);
   }
-  if (lineBreakIndices.empty()) return;
   const size_t lineCount = includeLastLine ? lineBreakIndices.size() : lineBreakIndices.size() - 1;
 
   for (size_t i = 0; i < lineCount; ++i) {
@@ -1050,7 +1049,6 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
 
   // Stores the index of the word that starts the next line (last_word_index + 1)
   std::vector<size_t> lineBreakIndices;
-  lineBreakIndices.reserve(words.size());
   size_t currentWordIndex = 0;
 
   while (currentWordIndex < totalWordCount) {
@@ -1077,7 +1075,6 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
   const int firstLineIndent = resolveFirstLineIndent(true, renderer, fontId);
 
   std::vector<size_t> lineBreakIndices;
-  lineBreakIndices.reserve(words.size());
   const bool characterMode = usesCharacterWrap();
   size_t currentIndex = 0;
   bool isFirstLine = true;
@@ -1167,7 +1164,6 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
   if (characterBreaks) {
     // Source byte offsets survive splitting, including links/focus annotations.
     // Never split UTF-8, combining marks, a joiner sequence, or around NB hyphens.
-    breakInfos.reserve(word.size());
     const auto* begin = reinterpret_cast<const uint8_t*>(word.c_str());
     const uint8_t* cursor = begin;
     while (*cursor) {

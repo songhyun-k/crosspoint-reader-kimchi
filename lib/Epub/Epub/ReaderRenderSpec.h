@@ -23,5 +23,4 @@ struct ReaderRenderSpec {
   bool focusReadingEnabled = false;
   bool characterWrap = true;
   bool paragraphIndent = false;
-  bool operator==(const ReaderRenderSpec&) const = default;
 };
