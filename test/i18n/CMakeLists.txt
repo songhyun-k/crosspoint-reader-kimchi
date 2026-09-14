@@ -11,7 +11,7 @@ add_custom_command(OUTPUT ${I18N_GENERATED_FILES}
   COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/gen_i18n.py
     ${REPO_ROOT}/lib/I18n/translations ${I18N_GENERATED_DIR}
     --src-dirs ${REPO_ROOT}/src ${REPO_ROOT}/lib --strip-unused
-  DEPENDS ${REPO_ROOT}/scripts/gen_i18n.py ${REPO_ROOT}/lib/I18n/languages.txt ${TRANSLATION_SOURCES}
+  DEPENDS ${REPO_ROOT}/scripts/gen_i18n.py ${TRANSLATION_SOURCES}
   VERBATIM
 )
 add_executable(I18nTest I18nTest.cpp ${REPO_ROOT}/lib/I18n/I18n.cpp ${I18N_GENERATED_FILES})

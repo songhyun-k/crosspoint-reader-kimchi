@@ -29,8 +29,6 @@ Examples:
     python gen_i18n.py lib/I18n/translations lib/I18n/
     python gen_i18n.py --strip-unused
     python gen_i18n.py --strip-unused --src-dirs src lib/EpdFont
-    python gen_i18n.py --languages EN KO
-    python gen_i18n.py --all-languages
 """
 
 import sys
@@ -117,7 +115,6 @@ def parse_yaml_file(filepath: str) -> Dict[str, str]:
 def load_translations(
     translations_dir: str,
     verbose: bool = False,
-    enabled_languages: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[str], List[str], List[str], Dict[str, List[str]], List[Set[str]]]:
     """
     Read every YAML file in *translations_dir* and return:
@@ -127,8 +124,7 @@ def load_translations(
         string_keys      ordered list of STR_* keys (from English)
         translations     {key: [translation_per_language]}
 
-    English is always first; the rest are sorted by _bcp47. When supplied,
-    enabled_languages selects which stable codes are compiled into the output.
+    English is always first; the rest are sorted by _bcp47.
     """
     yaml_dir = Path(translations_dir)
     if not yaml_dir.is_dir():
@@ -143,19 +139,8 @@ def load_translations(
     for yf in yaml_files:
         parsed[yf.name] = parse_yaml_file(str(yf))
 
-    if enabled_languages is not None:
-        if not enabled_languages or "EN" not in enabled_languages:
-            raise ValueError("The selected languages must include EN for string fallback")
-        if len(set(enabled_languages)) != len(enabled_languages):
-            raise ValueError("Duplicate selected language codes")
-        available = {data.get("_language_code") for data in parsed.values()}
-        missing = set(enabled_languages) - available
-        if missing:
-            raise ValueError(f"Unknown selected language codes: {', '.join(sorted(missing))}")
-        parsed = {
-            name: data for name, data in parsed.items()
-            if data.get("_language_code") in enabled_languages
-        }
+    # Keep upstream translation sources, but compile only kimchi's UI languages.
+    parsed = {name: data for name, data in parsed.items() if data.get("_language_code") in ("EN", "KO")}
 
     # Identify the English file (must exist)
     english_file = None
@@ -193,7 +178,6 @@ def load_translations(
 
     _check_unique("_order")
     _check_unique("_bcp47")
-    _check_unique("_language_code")
 
     # Order: English first (enum value 0), then by _bcp47 tag alphabetically.
     # This assigns the Language enum ordinal and also drives the visible
@@ -580,16 +564,15 @@ def generate_keys_header(
     # V1 language.bin migration table -- frozen enum order from commit 2f969a9.
     # Maps the old uint8_t index stored on disk to the current Language enum.
     # Preserve the old positions even when a language is not compiled in.
-    # Unsupported choices fall back to Korean in kimchi (English in other profiles).
+    # Unsupported choices fall back to Korean.
     v1_codes = [
         "EN", "ES", "FR", "DE", "CS", "PT", "RU", "SV", "RO", "CA", "UK",
         "BE", "IT", "PL", "FI", "DA", "NL", "TR", "KK", "HU", "LT", "SI",
     ]
     lines.append("// V1 language.bin migration table (frozen enum order from 2f969a9)")
     lines.append("constexpr Language V1_LANGUAGES[] = {")
-    fallback_code = "KO" if "KO" in languages else "EN"
     lines.append(
-        "    " + ", ".join(f"Language::{c if c in languages else fallback_code}" for c in v1_codes) + ","
+        "    " + ", ".join(f"Language::{c if c in languages else 'KO'}" for c in v1_codes) + ","
     )
     lines.append("};")
     lines.append(
@@ -856,17 +839,20 @@ def main(
     src_dirs: Optional[List[str]] = None,
     strip_unused: bool = False,
     verbose: bool = False,
-    enabled_languages: Optional[List[str]] = None,
-    all_languages: bool = False,
 ) -> None:
     # Default paths (relative to project root)
     default_translations_dir = "lib/I18n/translations"
     default_output_dir = "lib/I18n/"
     default_src_dirs = ["src", "lib"]
 
-    # argparse owns CLI parsing; imported/SCons calls must not reinterpret argv.
-    translations_dir = translations_dir or default_translations_dir
-    output_dir = output_dir or default_output_dir
+    if translations_dir is None or output_dir is None:
+        if len(sys.argv) == 3:
+            translations_dir = sys.argv[1]
+            output_dir = sys.argv[2]
+        else:
+            # Default for no arguments or weird arguments (e.g. SCons)
+            translations_dir = default_translations_dir
+            output_dir = default_output_dir
 
     if src_dirs is None:
         src_dirs = default_src_dirs
@@ -885,18 +871,8 @@ def main(
         print()
 
     try:
-        if all_languages and enabled_languages is not None:
-            raise ValueError("Choose either explicit languages or all languages")
-        if enabled_languages is None and not all_languages:
-            profile = Path(translations_dir).parent / "languages.txt"
-            if profile.is_file():
-                enabled_languages = [
-                    code
-                    for line in profile.read_text(encoding="utf-8").splitlines()
-                    for code in line.split("#", 1)[0].split()
-                ]
         languages, language_names, language_bcp47, string_keys, translations, inherited_sets = (
-            load_translations(translations_dir, verbose, enabled_languages)
+            load_translations(translations_dir, verbose)
         )
 
         # --- Unused-string detection ---
@@ -1027,15 +1003,6 @@ if __name__ == "__main__":
         action="store_true",
         help="Print per-key INFO/WARNING messages and file generation details",
     )
-    selection = parser.add_mutually_exclusive_group()
-    selection.add_argument(
-        "--languages", nargs="+", metavar="CODE",
-        help="Compile these language codes (must include EN); default: ../languages.txt if present",
-    )
-    selection.add_argument(
-        "--all-languages", action="store_true",
-        help="Ignore the language profile and generate every translation (diagnostic builds)",
-    )
     args = parser.parse_args()
     main(
         args.translations_dir,
@@ -1043,8 +1010,6 @@ if __name__ == "__main__":
         args.src_dirs,
         args.strip_unused,
         args.verbose,
-        args.languages,
-        args.all_languages,
     )
 else:
     try:

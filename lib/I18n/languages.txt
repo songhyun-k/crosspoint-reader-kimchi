@@ -1,4 +1,0 @@
-# Languages compiled into kimchi (stable settings codes, not enum ordinals).
-# Keep the other translation sources for future upstream merges.
-EN
-KO
