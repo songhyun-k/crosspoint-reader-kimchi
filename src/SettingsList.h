@@ -83,7 +83,7 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
 
   s.valueSetter = [sdFamilyNames](uint8_t v) {
     if (v < CrossPointSettings::BUILTIN_FONT_COUNT) {
-      SETTINGS.fontFamily = builtinReaderFamilyAt(v);
+      SETTINGS.fontFamily = v < 2 ? v : static_cast<uint8_t>(CrossPointSettings::KOPUB);
       SETTINGS.sdFontFamilyName[0] = '\0';
     } else {
       int sdIdx = v - CrossPointSettings::BUILTIN_FONT_COUNT;

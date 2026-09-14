@@ -212,7 +212,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
 
   // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
   const uint8_t storedFontFamily = doc["fontFamily"] | static_cast<uint8_t>(KOPUB);
-  fontFamily = isBuiltinReaderFamily(storedFontFamily) ? storedFontFamily : static_cast<uint8_t>(KOPUB);
+  fontFamily =
+      (storedFontFamily <= NOTOSANS || storedFontFamily == KOPUB) ? storedFontFamily : static_cast<uint8_t>(KOPUB);
   // SD card font family name — not in SettingsList, load manually
   const char* sfn = doc["sdFontFamilyName"] | "";
   strncpy(sdFontFamilyName, sfn, sizeof(sdFontFamilyName) - 1);
@@ -222,7 +223,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     strncpy(sdFontFamilyName, "OpenDyslexic", sizeof(sdFontFamilyName) - 1);
     sdFontFamilyName[sizeof(sdFontFamilyName) - 1] = '\0';
     needsResave = true;
-  } else if (!isBuiltinReaderFamily(storedFontFamily)) {
+  } else if (storedFontFamily != fontFamily) {
     needsResave = true;
   }
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, load manually
@@ -379,7 +380,8 @@ int CrossPointSettings::getReaderFontId() const {
   // normally persists the snap; snap again here (without allocating — this runs
   // in the page render loop) so rendering is correct even before it has run.
   if (fontFamily == KOPUB) return KIMCHI_BATANG_14_FONT_ID;
-  const uint8_t pt = snapToBuiltinPointSize(fontPointSize, fontFamily);
+  const uint8_t pt =
+      snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
   const bool sans = (fontFamily == NOTOSANS);
   switch (pt) {
     case 12:

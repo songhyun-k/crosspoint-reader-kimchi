@@ -88,8 +88,6 @@ TEST(KoreanFontsTest, PointSizeAndLegacyFamilyPoliciesStayConsistent) {
   EXPECT_EQ(readerFontPointSizes(nullptr, "", KOPUB_READER_FAMILY), std::vector<uint8_t>({14}));
   EXPECT_EQ(readerFontPointSizes(nullptr, "", 0), std::vector<uint8_t>({12, 14, 16, 18}));
   EXPECT_EQ(snapToBuiltinPointSize(18, KOPUB_READER_FAMILY), 14);
-  EXPECT_FALSE(isBuiltinReaderFamily(2));
-  EXPECT_EQ(builtinReaderFamilyAt(2), KOPUB_READER_FAMILY);
   EXPECT_EQ(builtinReaderFamilyIndex(KOPUB_READER_FAMILY), 2);
   SdCardFontRegistry registry;
   registry.families.push_back({"KimchiBatang", {12, 14, 16, 18}});

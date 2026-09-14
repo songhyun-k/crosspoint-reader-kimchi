@@ -17,11 +17,7 @@ inline constexpr uint8_t BUILTIN_READER_POINT_SIZES[] = {12, 14, 16, 18};
 inline constexpr uint8_t KOPUB_READER_FAMILY = 3;  // 2 remains the legacy OpenDyslexic value.
 inline constexpr uint8_t KOPUB_READER_POINT_SIZE = 14;
 
-constexpr bool isBuiltinReaderFamily(const uint8_t family) {
-  return family == 0 || family == 1 || family == KOPUB_READER_FAMILY;
-}
 constexpr uint8_t builtinReaderFamilyIndex(const uint8_t family) { return family < 2 ? family : 2; }
-constexpr uint8_t builtinReaderFamilyAt(const uint8_t index) { return index < 2 ? index : KOPUB_READER_FAMILY; }
 
 // Point sizes selectable for the active reader font, ascending: the SD family's
 // installed sizes when `sdFamilyName` names one the registry knows, otherwise
