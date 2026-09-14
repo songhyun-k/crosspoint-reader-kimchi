@@ -165,9 +165,7 @@ void XtcReaderActivity::renderPage() {
       return;
     }
     const size_t pageBufferSize = ((static_cast<size_t>(pageWidth) * pageHeight + 7) / 8) * 2;
-    auto pageBuffer = xtc::allocateGrayscalePage(pageBufferSize, [this] {
-      if (auto* caches = renderer.getFontCacheManager()) caches->releaseSdFontCaches();
-    });
+    auto pageBuffer = xtc::allocateGrayscalePage(pageBufferSize, renderer.getFontCacheManager());
     if (!pageBuffer) {
       LOG_ERR("XTR", "Page allocation failed after cache release and one retry (%u bytes)", pageBufferSize);
       showError(StrId::STR_MEMORY_ERROR);
@@ -261,8 +259,7 @@ void XtcReaderActivity::renderPage() {
     const auto error = xtc->loadPageStreaming(
         currentPage,
         [this, pageWidth](const uint8_t* data, const size_t size, const size_t offset) {
-          xtc::drawMonochromeBand(data, size, offset, pageWidth,
-                                  [this](uint16_t x, uint16_t y) { renderer.drawPixel(x, y, true); });
+          xtc::drawMonochromeBand(data, size, offset, pageWidth, renderer);
         },
         bandBytes);
     if (error != xtc::XtcError::OK) {

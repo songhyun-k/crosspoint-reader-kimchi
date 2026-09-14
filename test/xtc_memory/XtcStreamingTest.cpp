@@ -1,6 +1,8 @@
+#include <FontDecompressor.h>
 #include <HalStorage.h>
 #include <Xtc/XtcBitmap.h>
 #include <Xtc/XtcParser.h>
+#include <builtinFonts/kimchi_batang_14_regular.h>
 #include <gtest/gtest.h>
 
 #include <limits>
@@ -135,24 +137,25 @@ TEST_F(XtcStreamingTest, OddWidthAndFinalThreeRowsMatchEveryLegacyLogicalPixel) 
   storage_test::files["book.xtc"] = makeXtc({{width, height}});
   xtc::XtcParser parser;
   ASSERT_EQ(parser.open("book.xtc"), xtc::XtcError::OK);
-  std::vector<uint8_t> pixels(width * height, 0);
+  HalDisplay display;
+  GfxRenderer renderer(display);
+  renderer.begin();
+  renderer.setOrientation(GfxRenderer::LandscapeCounterClockwise);
+  renderer.clearScreen();
   std::vector<size_t> bands;
   ASSERT_EQ(parser.loadPageStreaming(
                 0,
                 [&](const uint8_t* data, size_t count, size_t offset) {
                   bands.push_back(count);
-                  xtc::drawMonochromeBand(data, count, offset, width, [&](uint16_t x, uint16_t y) {
-                    ASSERT_LT(x, width);
-                    ASSERT_LT(y, height);
-                    ++pixels[y * width + x];
-                  });
+                  xtc::drawMonochromeBand(data, count, offset, width, renderer);
                 },
                 2 * xtc::MONO_STREAM_ROWS),
             xtc::XtcError::OK);
   EXPECT_EQ(bands, (std::vector<size_t>{32, 32, 6}));
-  for (uint16_t y = 0; y < height; ++y) {
-    for (uint16_t x = 0; x < width; ++x) {
-      EXPECT_EQ(pixels[y * width + x], (x * 3 + y * 5) % 7 < 3 ? 1 : 0) << x << "," << y;
+  for (uint16_t y = 0; y <= height; ++y) {
+    for (uint16_t x = 0; x < 16; ++x) {
+      const bool black = (display.pixels[y * 100 + x / 8] & (0x80 >> (x % 8))) == 0;
+      EXPECT_EQ(black, x < width && y < height && (x * 3 + y * 5) % 7 < 3) << x << "," << y;
     }
   }
 }
@@ -265,43 +268,29 @@ TEST_F(XtcStreamingTest, GrayscaleRetainsBothPlanesAndRejectsUnsafeColumnHeights
   EXPECT_EQ(parser.getLastError(), xtc::XtcError::CORRUPTED_HEADER);
 }
 
-TEST(XtcGrayscaleAllocationTest, FirstSuccessDoesNotReleaseCaches) {
-  unsigned releases = 0;
-  std::unique_ptr<uint8_t[]> bytes;
-  {
-    allocation_test::ArrayFaultScope fault(0);
-    bytes = xtc::allocateGrayscalePage(96000, [&] { ++releases; });
+TEST(XtcGrayscaleAllocationTest, ReleasesTheRealFontCacheOnlyOnFailureAndRetriesOnce) {
+  HalDisplay display;
+  GfxRenderer renderer(display);
+  FontCacheManager caches(renderer.getFontMap(), renderer.getSdCardFonts());
+  FontDecompressor decompressor;
+  ASSERT_TRUE(decompressor.init());
+  caches.setFontDecompressor(&decompressor);
+  const EpdFont font(&kimchi_batang_14_regular);
+  const EpdGlyph* glyph = font.getGlyph(0xD55C);
+  ASSERT_NE(glyph, nullptr);
+  for (unsigned failures = 0; failures <= 2; ++failures) {
+    ASSERT_EQ(decompressor.prewarmCache(font.data, "한"), 0);
+    decompressor.resetStats();
+    std::unique_ptr<uint8_t[]> bytes;
+    {
+      allocation_test::ArrayFaultScope fault(failures);
+      bytes = xtc::allocateGrayscalePage(96000, &caches);
+    }
+    EXPECT_EQ(bytes != nullptr, failures < 2);
+    EXPECT_EQ(allocation_test::attempts, failures == 0 ? 1u : 2u);
+    EXPECT_EQ(allocation_test::largest, 96000u);
+    ASSERT_NE(decompressor.getBitmap(font.data, glyph, glyph - font.data->glyph), nullptr);
+    EXPECT_EQ(decompressor.getStats().cacheHits, failures == 0 ? 1u : 0u);
+    EXPECT_EQ(decompressor.getStats().cacheMisses, failures == 0 ? 0u : 1u);
   }
-  ASSERT_NE(bytes, nullptr);
-  EXPECT_EQ(allocation_test::attempts, 1u);
-  EXPECT_EQ(allocation_test::largest, 96000u);
-  EXPECT_EQ(releases, 0u);
-}
-
-TEST(XtcGrayscaleAllocationTest, FirstFailureReleasesBeforeTheSingleRetry) {
-  unsigned releases = 0, attemptsAtRelease = 0;
-  std::unique_ptr<uint8_t[]> bytes;
-  {
-    allocation_test::ArrayFaultScope fault(1);
-    bytes = xtc::allocateGrayscalePage(96000, [&] {
-      attemptsAtRelease = allocation_test::attempts;
-      ++releases;
-    });
-  }
-  ASSERT_NE(bytes, nullptr);
-  EXPECT_EQ(allocation_test::attempts, 2u);
-  EXPECT_EQ(attemptsAtRelease, 1u);
-  EXPECT_EQ(releases, 1u);
-}
-
-TEST(XtcGrayscaleAllocationTest, SecondFailureReturnsNullWithoutAThirdAllocation) {
-  unsigned releases = 0;
-  std::unique_ptr<uint8_t[]> bytes;
-  {
-    allocation_test::ArrayFaultScope fault(2);
-    bytes = xtc::allocateGrayscalePage(96000, [&] { ++releases; });
-  }
-  EXPECT_EQ(bytes, nullptr);
-  EXPECT_EQ(allocation_test::attempts, 2u);
-  EXPECT_EQ(releases, 1u);
 }
