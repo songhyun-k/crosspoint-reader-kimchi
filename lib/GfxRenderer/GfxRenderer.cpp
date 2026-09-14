@@ -507,8 +507,10 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     }
 
     if (is2Bit) {
+      int pixelPosition = 0;
       for (int glyphY = 0; glyphY < height; glyphY++) {
         const int outerCoord = outerBase + glyphY;
+        uint8_t previousRaw = 0;
         for (int glyphX = 0; glyphX < drawWidth; glyphX++) {
           int screenX, screenY;
           if constexpr (rotation == TextRotation::Rotated90CW) {
@@ -519,18 +521,21 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
             screenY = outerCoord;
           }
 
-          const auto rawAt = [&](const int column) -> uint8_t {
-            if (column < 0 || column >= width) return 0;
-            const int position = glyphY * width + column;
-            return (bitmap[position >> 2] >> ((3 - (position & 3)) * 2)) & 3;
-          };
+          uint8_t raw = 0;
+          if (glyphX < width) {
+            const uint8_t byte = bitmap[pixelPosition >> 2];
+            const uint8_t bit_index = (3 - (pixelPosition & 3)) * 2;
+            raw = (byte >> bit_index) & 0x3;
+            ++pixelPosition;
+          }
           // Merge coverage before selecting a gray plane. Copying plane bits
           // separately could turn a black overlap back into gray.
-          const uint8_t raw = syntheticBold ? std::max(rawAt(glyphX), rawAt(glyphX - 1)) : rawAt(glyphX);
+          const uint8_t merged = syntheticBold ? std::max(raw, previousRaw) : raw;
+          previousRaw = raw;
           // the direct bit from the font is 0 -> white, 1 -> light gray, 2 -> dark gray, 3 -> black
           // we swap this to better match the way images and screen think about colors:
           // 0 -> black, 1 -> dark grey, 2 -> light grey, 3 -> white
-          const uint8_t bmpVal = 3 - raw;
+          const uint8_t bmpVal = 3 - merged;
 
           if (renderMode == GfxRenderer::BW && bmpVal < 3) {
             // Black (also paints over the grays in BW mode)
@@ -547,8 +552,10 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
         }
       }
     } else {
+      int pixelPosition = 0;
       for (int glyphY = 0; glyphY < height; glyphY++) {
         const int outerCoord = outerBase + glyphY;
+        bool previousInk = false;
         for (int glyphX = 0; glyphX < drawWidth; glyphX++) {
           int screenX, screenY;
           if constexpr (rotation == TextRotation::Rotated90CW) {
@@ -559,14 +566,17 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
             screenY = outerCoord;
           }
 
-          const auto inkAt = [&](const int column) {
-            if (column < 0 || column >= width) return false;
-            const int position = glyphY * width + column;
-            return ((bitmap[position >> 3] >> (7 - (position & 7))) & 1) != 0;
-          };
-          if (inkAt(glyphX) || (syntheticBold && inkAt(glyphX - 1))) {
+          bool ink = false;
+          if (glyphX < width) {
+            const uint8_t byte = bitmap[pixelPosition >> 3];
+            const uint8_t bit_index = 7 - (pixelPosition & 7);
+            ink = ((byte >> bit_index) & 1) != 0;
+            ++pixelPosition;
+          }
+          if (ink || (syntheticBold && previousInk)) {
             renderer.drawPixel(screenX, screenY, pixelState);
           }
+          previousInk = ink;
         }
       }
     }
