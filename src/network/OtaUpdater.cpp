@@ -35,9 +35,16 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   ReleaseJsonParser releaseParser;
   // Each board updates from its own release asset: plain firmware.bin for the
   // C3 X4/X3 binary (pre-existing releases), firmware-<board>.bin otherwise.
-  char assetName[48];
-  if (!kimchi_release::assetName({board_tag::boardName(), board_tag::boardNameLen()}, assetName, sizeof(assetName)))
-    return INTERNAL_UPDATE_ERROR;
+  const bool isX4 = board_tag::boardNameLen() == 2 && memcmp(board_tag::boardName(), "x4", 2) == 0;
+  char assetName[48] = "firmware.bin";
+  if (!isX4) {
+    const int length = snprintf(assetName, sizeof(assetName), "firmware-%.*s.bin",
+                                static_cast<int>(board_tag::boardNameLen()), board_tag::boardName());
+    if (length < 0 || static_cast<size_t>(length) >= sizeof(assetName)) {
+      LOG_ERR("OTA", "Firmware asset name too long");
+      return INTERNAL_UPDATE_ERROR;
+    }
+  }
   releaseParser.setFirmwareAssetName(assetName);
   const bool ok =
       HttpDownloader::fetchUrl(kimchi_release::LATEST_URL, [&releaseParser](const uint8_t* data, size_t len) {

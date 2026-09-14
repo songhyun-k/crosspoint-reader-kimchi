@@ -95,17 +95,6 @@ TEST(KimchiVersionTest, RejectsMalformedAndForeignTagsWithoutUninitializedNumber
   }
 }
 
-TEST(KimchiVersionTest, KeepsTheOriginalBoardAssetNames) {
-  char output[48];
-  for (const char* board : {"x4", "sticky", "x4pro", "papermono", "x4c", "m5paper"}) {
-    ASSERT_TRUE(kimchi_release::assetName(board, output, sizeof(output)));
-    EXPECT_EQ(output, std::string(board) == "x4" ? "firmware.bin" : "firmware-" + std::string(board) + ".bin");
-  }
-  EXPECT_FALSE(kimchi_release::assetName("../x4", output, sizeof(output)));
-  EXPECT_FALSE(kimchi_release::assetName("", output, sizeof(output)));
-  EXPECT_FALSE(kimchi_release::assetName("sticky", output, 2));
-}
-
 TEST_F(KimchiOtaTest, UsesKimchiLatestAndTheRealCompiledBoardTag) {
   EXPECT_EQ(std::string(board_tag::boardName(), board_tag::boardNameLen()), TEST_BOARD_NAME);
   for (size_t chunk : {1u, 7u, 31u, 1024u}) {

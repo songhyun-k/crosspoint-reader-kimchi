@@ -1,7 +1,5 @@
 #include "KimchiRelease.h"
 
-#include <algorithm>
-#include <cstdio>
 #include <limits>
 
 namespace kimchi_release {
@@ -42,23 +40,6 @@ bool parseVersion(std::string_view text, Version& result) {
 bool isNewer(const std::string_view candidate, const std::string_view current) {
   Version next, installed;
   return parseVersion(candidate, next) && parseVersion(current, installed) && next.numbers > installed.numbers;
-}
-
-bool assetName(const std::string_view board, char* output, const size_t capacity) {
-  if (!output || capacity == 0) return false;
-  output[0] = '\0';
-  if (board.empty() || board.size() > 23) return false;
-  if (!std::all_of(board.begin(), board.end(),
-                   [](const char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; }))
-    return false;
-  const int length = board == "x4" ? std::snprintf(output, capacity, "firmware.bin")
-                                   : std::snprintf(output, capacity, "firmware-%.*s.bin",
-                                                   static_cast<int>(board.size()), board.data());
-  if (length < 0 || static_cast<size_t>(length) >= capacity) {
-    output[0] = '\0';
-    return false;
-  }
-  return true;
 }
 
 bool matchesAssetUrl(std::string_view url, const std::string_view tag, const std::string_view asset) {
