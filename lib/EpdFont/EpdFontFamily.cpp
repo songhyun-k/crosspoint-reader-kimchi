@@ -1,9 +1,27 @@
 #include "EpdFontFamily.h"
 
 const EpdFont* EpdFontFamily::getFont(const Style style) const {
-  const EpdFont* fonts[] = {regular, bold, italic, boldItalic};
-  const uint8_t mask = (regular ? 1 : 0) | (bold ? 2 : 0) | (italic ? 4 : 0) | (boldItalic ? 8 : 0);
-  return fonts[resolveStyle(static_cast<uint8_t>(style), mask)];
+  // Extract font style bits; render-time overlay bits do not affect font selection.
+  const bool hasBold = (style & BOLD) != 0;
+  const bool hasItalic = (style & ITALIC) != 0;
+
+  if (hasBold && hasItalic) {
+    if (boldItalic) return boldItalic;
+    if (bold) return bold;
+    if (italic) return italic;
+  } else if (hasBold && bold) {
+    return bold;
+  } else if (hasItalic && italic) {
+    return italic;
+  }
+
+  // Sparse SD families must agree with SdCardFont's advance-table fallback.
+  if (!regular) {
+    if ((hasBold || hasItalic) && boldItalic) return boldItalic;
+    if (bold) return bold;
+    return italic ? italic : boldItalic;
+  }
+  return regular;
 }
 
 bool EpdFontFamily::needsSyntheticBold(const Style style) const {

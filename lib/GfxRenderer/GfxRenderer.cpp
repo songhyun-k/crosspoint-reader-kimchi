@@ -695,6 +695,8 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
   const auto& font = fontIt->second;
 
   const char* textCursor = renderedText;
+  const bool syntheticBold = font.needsSyntheticBold(style);
+  const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
   uint32_t cp;
   uint32_t prevCp = 0;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&textCursor)))) {
@@ -732,8 +734,7 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     lastBaseLeft = glyph ? glyph->left : 0;
     lastBaseWidth = glyph ? glyph->width : 0;
     lastBaseTop = glyph ? glyph->top : 0;
-    const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
-    prevAdvanceFP = EpdFont::advanceForRender(glyph ? glyph->advanceX : 0, font.needsSyntheticBold(style), isSupSub);
+    prevAdvanceFP = EpdFont::advanceForRender(glyph ? glyph->advanceX : 0, syntheticBold, isSupSub);
 
     if (isSupSub) {
       // yPos already carries the vertical offset applied by TextBlock::render().
@@ -2143,6 +2144,8 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
   const auto& font = fontIt->second;
 
   int lastBaseY = y;
+  const bool syntheticBold = font.needsSyntheticBold(style);
+  const bool halfSize = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
   int lastBaseLeft = 0;
   int lastBaseWidth = 0;
   int lastBaseTop = 0;
@@ -2185,8 +2188,7 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
     lastBaseLeft = glyph ? glyph->left : 0;
     lastBaseWidth = glyph ? glyph->width : 0;
     lastBaseTop = glyph ? glyph->top : 0;
-    const bool halfSize = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
-    prevAdvanceFP = EpdFont::advanceForRender(glyph ? glyph->advanceX : 0, font.needsSyntheticBold(style), halfSize);
+    prevAdvanceFP = EpdFont::advanceForRender(glyph ? glyph->advanceX : 0, syntheticBold, halfSize);
     if (halfSize) {
       renderCharScaled<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, lastBaseY, black, style);
     } else {
