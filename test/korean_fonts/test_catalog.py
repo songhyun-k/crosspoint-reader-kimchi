@@ -33,12 +33,10 @@ SOURCE = load("korean_font_sources", SCRIPTS / "convert-korean-fonts.py")
 
 class KoreanFontCatalogTest(unittest.TestCase):
     def test_sources_are_pinned_and_keep_the_original_notices(self):
-        SOURCE.prepare_sources(None)
+        metadata = json.loads((SOURCE.BUILTINS / "source/korean-font-sources.json").read_text())
         for name, expected in SOURCE.SOURCES.items():
             self.assertEqual(hashlib.sha256((SOURCE.BUILTINS / "source" / name).read_bytes()).hexdigest(), expected)
-        if importlib.util.find_spec("fontTools") is None or importlib.util.find_spec("freetype") is None:
-            self.skipTest("Install lib/EpdFont/scripts/requirements.txt to inspect source font metadata")
-        metadata = SOURCE.source_metadata()
+            self.assertEqual(metadata["fonts"][name]["sha256"], expected)
         body = metadata["fonts"]["KoPub-Batang/KoPub Batang Light.ttf"]
         self.assertEqual((body["hangulSyllables"], body["hanja"]), (11172, 4620))
         self.assertTrue(any("Copyright" in text for text in body["sourceNamesAndNotices"]))

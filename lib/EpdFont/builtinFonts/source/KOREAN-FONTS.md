@@ -2,8 +2,8 @@
 
 These inputs are copied without modification from the user-provided
 `crosspoint-reader-ko` Git object `84a39194dfce1ebd772ac9163df0a59daa0d72dc`.
-`convert-korean-fonts.py --ko-repo <path>` verifies their SHA256 before writing
-them and refuses to overwrite different local inputs. The generated
+The source files are tracked; `convert-korean-fonts.py` verifies their SHA256
+before conversion and never writes the inputs. The tracked snapshot
 `korean-font-sources.json` preserves copyright, author, family/style, version
 and embedded licensing metadata. Fonts are not relicensed by this repository's
 GPL source-code license.
