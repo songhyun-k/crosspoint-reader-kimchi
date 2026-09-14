@@ -17,12 +17,14 @@
 
 #include "FirmwareBoardTag.h"
 #include "FirmwareFlasher.h"
-
-namespace {
-constexpr char latestReleaseUrl[] = "https://api.github.com/repos/crosspoint-reader/crosspoint-reader/releases/latest";
-}  // namespace
+#include "KimchiRelease.h"
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
+  // A failed second check must never leave a previously found update usable.
+  updateAvailable = false;
+  latestVersion.clear();
+  otaUrl.clear();
+  otaSize = processedSize = totalSize = 0;
   LOG_DBG("OTA", "Checking for update (current: %s)", CROSSPOINT_VERSION);
 
   // Stream the ~32KB release JSON straight into the parser as it arrives.
@@ -33,17 +35,15 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   ReleaseJsonParser releaseParser;
   // Each board updates from its own release asset: plain firmware.bin for the
   // C3 X4/X3 binary (pre-existing releases), firmware-<board>.bin otherwise.
-  const bool isX4 = board_tag::boardNameLen() == 2 && memcmp(board_tag::boardName(), "x4", 2) == 0;
-  char assetName[48] = "firmware.bin";
-  if (!isX4) {
-    snprintf(assetName, sizeof(assetName), "firmware-%.*s.bin", static_cast<int>(board_tag::boardNameLen()),
-             board_tag::boardName());
-  }
+  char assetName[48];
+  if (!kimchi_release::assetName({board_tag::boardName(), board_tag::boardNameLen()}, assetName, sizeof(assetName)))
+    return INTERNAL_UPDATE_ERROR;
   releaseParser.setFirmwareAssetName(assetName);
-  const bool ok = HttpDownloader::fetchUrl(latestReleaseUrl, [&releaseParser](const uint8_t* data, size_t len) {
-    releaseParser.feed(reinterpret_cast<const char*>(data), len);
-    return true;
-  });
+  const bool ok =
+      HttpDownloader::fetchUrl(kimchi_release::LATEST_URL, [&releaseParser](const uint8_t* data, size_t len) {
+        releaseParser.feed(reinterpret_cast<const char*>(data), len);
+        return true;
+      });
   if (!ok) {
     LOG_ERR("OTA", "Release check fetch failed");
     return HTTP_ERROR;
@@ -52,17 +52,27 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   LOG_DBG("OTA", "Parser results: tag=%s firmware=%s", releaseParser.foundTag() ? "yes" : "no",
           releaseParser.foundFirmware() ? "yes" : "no");
 
-  if (!releaseParser.foundTag()) {
-    LOG_ERR("OTA", "No tag_name in release JSON");
+  kimchi_release::Version parsed;
+  if (!releaseParser.isComplete() || !releaseParser.foundTag() ||
+      !kimchi_release::parseVersion(releaseParser.getTagName(), parsed)) {
+    LOG_ERR("OTA", "Incomplete release JSON or invalid kimchi tag");
     return JSON_PARSE_ERROR;
   }
+
+  latestVersion = releaseParser.getTagName();
+  if (!releaseParser.isPublishedRelease() || !kimchi_release::isNewer(latestVersion, CROSSPOINT_RELEASE_VERSION))
+    return NO_UPDATE;
 
   if (!releaseParser.foundFirmware()) {
     LOG_INF("OTA", "No %s asset in latest release", assetName);
     return NO_UPDATE;
   }
 
-  latestVersion = releaseParser.getTagName();
+  if (releaseParser.getFirmwareSize() < 24 ||
+      !kimchi_release::matchesAssetUrl(releaseParser.getFirmwareUrl(), latestVersion, assetName)) {
+    LOG_ERR("OTA", "Invalid kimchi firmware asset URL or size");
+    return JSON_PARSE_ERROR;
+  }
   otaUrl = releaseParser.getFirmwareUrl();
   otaSize = releaseParser.getFirmwareSize();
   totalSize = otaSize;
@@ -74,46 +84,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
 }
 
 bool OtaUpdater::isUpdateNewer() const {
-  if (!updateAvailable || latestVersion.empty() || latestVersion == CROSSPOINT_VERSION) {
-    return false;
-  }
-
-  int currentMajor, currentMinor, currentPatch;
-  int latestMajor, latestMinor, latestPatch;
-
-  const auto currentVersion = CROSSPOINT_VERSION;
-
-  // semantic version check (only match on 3 segments)
-  sscanf(latestVersion.c_str(), "%d.%d.%d", &latestMajor, &latestMinor, &latestPatch);
-  sscanf(currentVersion, "%d.%d.%d", &currentMajor, &currentMinor, &currentPatch);
-
-  /*
-   * Compare major versions.
-   * If they differ, return true if latest major version greater than current major version
-   * otherwise return false.
-   */
-  if (latestMajor != currentMajor) return latestMajor > currentMajor;
-
-  /*
-   * Compare minor versions.
-   * If they differ, return true if latest minor version greater than current minor version
-   * otherwise return false.
-   */
-  if (latestMinor != currentMinor) return latestMinor > currentMinor;
-
-  /*
-   * Check patch versions.
-   */
-  if (latestPatch != currentPatch) return latestPatch > currentPatch;
-
-  // If we reach here, it means all segments are equal.
-  // One final check, if we're on an RC build (contains "-rc"), we should consider the latest version as newer even if
-  // the segments are equal, since RC builds are pre-release versions.
-  if (strstr(currentVersion, "-rc") != nullptr) {
-    return true;
-  }
-
-  return false;
+  return updateAvailable && kimchi_release::isNewer(latestVersion, CROSSPOINT_RELEASE_VERSION);
 }
 
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
@@ -133,9 +104,13 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     LOG_ERR("OTA", "No OTA partition available");
     return INTERNAL_UPDATE_ERROR;
   }
+  if (otaSize > updatePartition->size) {
+    LOG_ERR("OTA", "Image (%zu bytes) exceeds actual OTA slot (%lu bytes)", otaSize, updatePartition->size);
+    return INTERNAL_UPDATE_ERROR;
+  }
 
   esp_ota_handle_t otaHandle = 0;
-  esp_err_t esp_err = esp_ota_begin(updatePartition, OTA_SIZE_UNKNOWN, &otaHandle);
+  esp_err_t esp_err = esp_ota_begin(updatePartition, otaSize, &otaHandle);
   if (esp_err != ESP_OK) {
     LOG_ERR("OTA", "esp_ota_begin failed: %s", esp_err_to_name(esp_err));
     return INTERNAL_UPDATE_ERROR;
@@ -160,11 +135,19 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   // the boot target.
   board_tag::Scanner tagScanner;
   const bool fetchOk = HttpDownloader::fetchUrl(otaUrl, [&](const uint8_t* data, size_t len) {
+    if (len > otaSize - processedSize || len > updatePartition->size - processedSize) {
+      flashOk = false;
+      return false;
+    }
     if (hdrLen < sizeof(hdr)) {
       const size_t take = std::min(len, sizeof(hdr) - hdrLen);
       std::memcpy(hdr + hdrLen, data, take);
       hdrLen += take;
       if (hdrLen == sizeof(hdr)) {
+        if (hdr[0] != 0xE9) {
+          flashOk = false;
+          return false;
+        }
         uint16_t imageChip;
         std::memcpy(&imageChip, hdr + 12, sizeof(imageChip));
         const uint16_t deviceChip = firmware_flash::runningPartitionChipId();
@@ -208,7 +191,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     return WRONG_DEVICE_ERROR;
   }
 
-  if (!fetchOk || !flashOk) {
+  if (!fetchOk || !flashOk || hdrLen != sizeof(hdr) || processedSize != otaSize) {
     LOG_ERR("OTA", "Firmware install failed (%s)", flashOk ? "download" : "flash write");
     esp_ota_abort(otaHandle);
     return flashOk ? HTTP_ERROR : INTERNAL_UPDATE_ERROR;

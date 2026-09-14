@@ -27,10 +27,9 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
   requestUpdateAndWait();
 
   const auto res = updater.checkForUpdate();
-  // NO_UPDATE here means the release carries no firmware asset for this board
-  // (expected until per-board assets are published) — not a failure.
+  // No newer published kimchi version, or no asset for this board, is not a failure.
   if (res == OtaUpdater::NO_UPDATE) {
-    LOG_DBG("OTA", "No firmware asset for this board in latest release");
+    LOG_DBG("OTA", "No newer published firmware for this board");
     {
       RenderLock lock(*this);
       state = NO_UPDATE;
