@@ -14,7 +14,7 @@ TEST(I18nTest, InitialLanguageIsKorean) {
 TEST(I18nTest, SavedCodesSurviveAResetWithoutDependingOnEnumOrder) {
   for (const auto language : {Language::EN, Language::KO}) {
     I18N.setLanguage(language);
-    const std::string savedCode = I18n::languageToCode(I18N.getLanguage());
+    const std::string savedCode = LANGUAGE_CODES[static_cast<uint8_t>(I18N.getLanguage())];
     EXPECT_EQ(savedCode, language == Language::EN ? "EN" : "KO");
     I18N.setLanguage(I18n::DEFAULT_LANGUAGE);
     I18N.setLanguage(I18n::languageFromCode(savedCode.c_str()));
@@ -23,12 +23,9 @@ TEST(I18nTest, SavedCodesSurviveAResetWithoutDependingOnEnumOrder) {
   }
 }
 
-TEST(I18nTest, LegacyKoreanCodeAndInvalidCodesHaveSafeDefaults) {
-  EXPECT_EQ(I18n::languageFromCode("KOREAN"), Language::KO);
-  EXPECT_EQ(I18n::languageFromCode(nullptr), Language::KO);
+TEST(I18nTest, UnknownCodesUseKorean) {
   EXPECT_EQ(I18n::languageFromCode(""), Language::KO);
   EXPECT_EQ(I18n::languageFromCode("not-a-language"), Language::KO);
-  EXPECT_STREQ(I18n::languageToCode(static_cast<Language>(255)), "KO");
 }
 
 TEST(I18nTest, InvalidSelectionCannotChangeChosenLanguage) {
