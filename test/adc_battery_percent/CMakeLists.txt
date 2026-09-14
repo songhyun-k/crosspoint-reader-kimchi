@@ -1,0 +1,3 @@
+add_executable(AdcBatteryPercentTest AdcBatteryPercentTest.cpp)
+target_link_libraries(AdcBatteryPercentTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(AdcBatteryPercentTest)

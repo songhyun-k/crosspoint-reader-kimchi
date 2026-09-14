@@ -9,6 +9,7 @@
 
 #include <cassert>
 
+#include "AdcBatteryPercent.h"
 #include "HalGPIO.h"
 
 #if FREEINK_DEVICE_PAPERMONO
@@ -150,13 +151,8 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
     return _batteryCachedPercent;
   }
 
-  // smooth the battery %.
-  if (_batteryCachedPercent == 0) {
-    _batteryCachedPercent = 10 * battery.readPercentage();
-  } else {
-    _batteryCachedPercent = (_batteryCachedPercent * 9 + battery.readPercentage() * 10) / 10;
-  }
-  return _batteryCachedPercent / 10;
+  const bool isX4Adc = BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX4 && BoardConfig::ACTIVE.batteryAdc >= 0;
+  return battery_percent::smoothAdcSample(battery.readPercentage(), isX4Adc, _batteryCachedPercent);
 }
 
 HalPowerManager::Lock::Lock() {
