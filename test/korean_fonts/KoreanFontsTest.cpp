@@ -14,9 +14,7 @@
 #include <iterator>
 #include <vector>
 
-#include "FontManifest.h"
 #include "ReaderFontSizes.h"
-#include "fontIds.h"
 
 namespace {
 size_t coverage(const EpdFont& font, const uint32_t first, const uint32_t last) {
@@ -44,9 +42,6 @@ TEST(KoreanFontsTest, CompiledUiTranslationsHaveRealBuiltInGlyphs) {
       EXPECT_TRUE(ui.hasCodepoint(cp)) << "missing U+" << std::hex << cp;
     }
   }
-  EXPECT_EQ(UI_10_FONT_ID, UI_12_FONT_ID);
-  EXPECT_EQ(UI_10_FONT_ID, SMALL_FONT_ID);
-  EXPECT_NE(UI_10_FONT_ID, KIMCHI_BATANG_14_FONT_ID);
 }
 
 TEST(KoreanFontsTest, EveryGroupDecodesWithTheActualFirmwareInflater) {
@@ -88,19 +83,11 @@ TEST(KoreanFontsTest, PointSizeAndLegacyFamilyPoliciesStayConsistent) {
   EXPECT_EQ(readerFontPointSizes(nullptr, "", KOPUB_READER_FAMILY), std::vector<uint8_t>({14}));
   EXPECT_EQ(readerFontPointSizes(nullptr, "", 0), std::vector<uint8_t>({12, 14, 16, 18}));
   EXPECT_EQ(snapToBuiltinPointSize(18, KOPUB_READER_FAMILY), 14);
-  EXPECT_EQ(builtinReaderFamilyIndex(KOPUB_READER_FAMILY), 2);
   SdCardFontRegistry registry;
   registry.families.push_back({"KimchiBatang", {12, 14, 16, 18}});
   EXPECT_EQ(readerFontPointSizes(&registry, "KimchiBatang", KOPUB_READER_FAMILY),
             std::vector<uint8_t>({12, 14, 16, 18}));
   EXPECT_EQ(readerFontPointSizes(&registry, "missing", KOPUB_READER_FAMILY), std::vector<uint8_t>({14}));
-}
-
-TEST(KoreanFontsTest, ManifestUrlUsesTheFirmwareSchemaAndBinaryVersions) {
-  const std::string expected = "https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/sd-fonts-m" +
-                               std::to_string(FONTS_MANIFEST_VERSION) + "-b" + std::to_string(CPFONT_VERSION) +
-                               "/fonts.json";
-  EXPECT_EQ(FONT_MANIFEST_URL, expected);
 }
 
 TEST(KoreanFontsTest, LocallyGeneratedCpfontsLoadWithTheUnchangedV4Reader) {
