@@ -1,5 +1,6 @@
 #include "KimchiRelease.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <limits>
 
@@ -47,9 +48,9 @@ bool assetName(const std::string_view board, char* output, const size_t capacity
   if (!output || capacity == 0) return false;
   output[0] = '\0';
   if (board.empty() || board.size() > 23) return false;
-  for (const char c : board) {
-    if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')) return false;
-  }
+  if (!std::all_of(board.begin(), board.end(),
+                   [](const char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'; }))
+    return false;
   const int length = board == "x4" ? std::snprintf(output, capacity, "firmware.bin")
                                    : std::snprintf(output, capacity, "firmware-%.*s.bin",
                                                    static_cast<int>(board.size()), board.data());
