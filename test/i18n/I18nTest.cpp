@@ -58,3 +58,24 @@ TEST(I18nTest, KoreanPrintfFieldsPreserveArgumentTypesAndEscapedPercent) {
   std::snprintf(text, sizeof(text), tr(STR_PAGE_TOTAL_OVERALL_FORMAT), 4, 12, 25.5);
   EXPECT_STREQ(text, "4/12 페이지, 전체 25.50%");
 }
+
+TEST(I18nTest, OnlyEnglishAndKoreanAreSelectable) {
+  EXPECT_EQ(getLanguageCount(), 2);
+  EXPECT_EQ(static_cast<Language>(SORTED_LANGUAGE_INDICES[0]), Language::EN);
+  EXPECT_EQ(static_cast<Language>(SORTED_LANGUAGE_INDICES[1]), Language::KO);
+  EXPECT_STREQ(I18N.getLanguageName(Language::EN), "English");
+  EXPECT_STREQ(I18N.getLanguageName(Language::KO), "한국어");
+}
+
+TEST(I18nTest, RemovedLanguagesDoNotReinterpretAStoredChoice) {
+  for (const char* code : {"FR", "DE", "RU", "UK", "HE", "ES", "VI"}) {
+    EXPECT_EQ(I18n::languageFromCode(code), Language::KO);
+  }
+  EXPECT_EQ(I18n::languageFromCode("EN"), Language::EN);
+  EXPECT_EQ(I18n::languageFromCode("KO"), Language::KO);
+  EXPECT_EQ(V1_LANGUAGE_COUNT, 22);
+  EXPECT_EQ(V1_LANGUAGES[0], Language::EN);
+  for (uint8_t oldIndex = 1; oldIndex < V1_LANGUAGE_COUNT; ++oldIndex) {
+    EXPECT_EQ(V1_LANGUAGES[oldIndex], Language::KO);
+  }
+}

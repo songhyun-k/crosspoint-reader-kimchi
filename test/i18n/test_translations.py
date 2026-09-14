@@ -2,6 +2,10 @@
 
 import importlib.util
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -47,6 +51,52 @@ class KoreanTranslationsTest(unittest.TestCase):
         index = codes.index("KO")
         self.assertEqual(tags[index], "ko")
         self.assertEqual(inherited[index], set())
+
+    def test_selected_languages_keep_english_first_and_remove_other_data(self):
+        codes, names, tags, _, _, inherited = GEN.load_translations(str(TRANSLATIONS), enabled_languages=["KO", "EN"])
+        self.assertEqual(codes, ["EN", "KO"])
+        self.assertEqual(names, ["English", "한국어"])
+        self.assertEqual(tags, ["en", "ko"])
+        self.assertEqual(inherited, [set(), set()])
+
+    def test_bad_language_profiles_fail_instead_of_silently_changing_the_ui(self):
+        for selected in ([], ["KO"], ["EN", "KO", "KO"], ["EN", "missing"]):
+            with self.subTest(selected=selected), self.assertRaises(ValueError):
+                GEN.load_translations(str(TRANSLATIONS), enabled_languages=selected)
+
+    def test_default_cli_uses_the_committed_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "scripts/gen_i18n.py"), str(TRANSLATIONS), tmp],
+                cwd=ROOT, capture_output=True, text=True, check=True,
+            )
+            self.assertIn("Languages: 2", result.stdout)
+            keys = (Path(tmp) / "I18nKeys.h").read_text()
+            strings = (Path(tmp) / "I18nStrings.cpp").read_text()
+            self.assertIn("STRINGS_KO_DATA", keys)
+            self.assertIn("STRINGS_EN_DATA", strings)
+            self.assertNotIn("STRINGS_FR_DATA", strings)
+            self.assertNotIn("Language::FR", keys)
+
+    def test_all_languages_cli_remains_available_for_upstream_audits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(
+                [sys.executable, str(ROOT / "scripts/gen_i18n.py"), str(TRANSLATIONS), tmp, "--all-languages"],
+                cwd=ROOT, capture_output=True, text=True, check=True,
+            )
+            self.assertIn("STRINGS_FR_DATA", (Path(tmp) / "I18nStrings.cpp").read_text())
+
+    def test_single_language_flag_is_not_mistaken_for_a_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp) / "lib/I18n/translations"
+            fixture.mkdir(parents=True)
+            shutil.copyfile(TRANSLATIONS / "english.yaml", fixture / "english.yaml")
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "scripts/gen_i18n.py"), "--languages", "EN"],
+                cwd=tmp, capture_output=True, text=True, check=True,
+            )
+            self.assertIn("Languages: 1", result.stdout)
+            self.assertNotIn("Language::KO", (fixture.parent / "I18nKeys.h").read_text())
 
 
 if __name__ == "__main__":
