@@ -1566,22 +1566,11 @@ EpdFont* SdCardFont::getEpdFont(uint8_t style) {
 bool SdCardFont::hasStyle(uint8_t style) const { return styles_[style & (MAX_STYLES - 1)].present; }
 
 uint8_t SdCardFont::resolveStyle(uint8_t style) const {
-  static const uint8_t kFallbacks[MAX_STYLES][MAX_STYLES] = {
-      // REGULAR: REGULAR -> BOLD -> ITALIC -> BOLD_ITALIC
-      {EpdFontFamily::REGULAR, EpdFontFamily::BOLD, EpdFontFamily::ITALIC, EpdFontFamily::BOLD_ITALIC},
-      // BOLD: BOLD -> REGULAR -> BOLD_ITALIC -> ITALIC
-      {EpdFontFamily::BOLD, EpdFontFamily::REGULAR, EpdFontFamily::BOLD_ITALIC, EpdFontFamily::ITALIC},
-      // ITALIC: ITALIC -> REGULAR -> BOLD_ITALIC -> BOLD
-      {EpdFontFamily::ITALIC, EpdFontFamily::REGULAR, EpdFontFamily::BOLD_ITALIC, EpdFontFamily::BOLD},
-      // BOLD_ITALIC: BOLD_ITALIC -> BOLD -> ITALIC -> REGULAR
-      {EpdFontFamily::BOLD_ITALIC, EpdFontFamily::BOLD, EpdFontFamily::ITALIC, EpdFontFamily::REGULAR},
-  };
-
-  const uint8_t styleBits = style & (MAX_STYLES - 1);
-  for (uint8_t candidate : kFallbacks[styleBits]) {
-    if (styles_[candidate].present) return candidate;
+  uint8_t mask = 0;
+  for (uint8_t i = 0; i < MAX_STYLES; ++i) {
+    if (styles_[i].present) mask |= 1u << i;
   }
-  return EpdFontFamily::REGULAR;
+  return EpdFontFamily::resolveStyle(style, mask);
 }
 
 uint8_t SdCardFont::resolveStyleMask(uint8_t styleMask) const {

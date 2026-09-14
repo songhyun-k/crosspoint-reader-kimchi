@@ -5,13 +5,13 @@
 #include <algorithm>
 
 void EpdFont::getTextBounds(const char* string, const int startX, const int startY, int* minX, int* minY, int* maxX,
-                            int* maxY) const {
+                            int* maxY, const bool syntheticBold, const bool halfSize) const {
   *minX = startX;
   *minY = startY;
   *maxX = startX;
   *maxY = startY;
 
-  if (*string == '\0') {
+  if (!string || *string == '\0') {
     return;
   }
 
@@ -57,25 +57,32 @@ void EpdFont::getTextBounds(const char* string, const int startX, const int star
                                        : lastBaseX;
     const int glyphBaseY = startY - raiseBy;
 
-    *minX = std::min(*minX, glyphBaseX + glyph->left);
-    *maxX = std::max(*maxX, glyphBaseX + glyph->left + glyph->width);
-    *minY = std::min(*minY, glyphBaseY + glyph->top - glyph->height);
-    *maxY = std::max(*maxY, glyphBaseY + glyph->top);
+    const bool scale = halfSize && !isCombining;
+    const int left = scale ? glyph->left / 2 : glyph->left;
+    const int top = scale ? glyph->top / 2 : glyph->top;
+    const int width = scale ? (glyph->width + 1) / 2 : glyph->width;
+    const int height = scale ? (glyph->height + 1) / 2 : glyph->height;
+    const int boldExtent = syntheticBold && width > 0 && height > 0 ? 1 : 0;
+    *minX = std::min(*minX, glyphBaseX + left);
+    *maxX = std::max(*maxX, glyphBaseX + left + width + boldExtent);
+    *minY = std::min(*minY, glyphBaseY + top - height);
+    *maxY = std::max(*maxY, glyphBaseY + top);
 
     if (!isCombining) {
       lastBaseLeft = glyph->left;
       lastBaseWidth = glyph->width;
       lastBaseTop = glyph->top;
-      prevAdvanceFP = glyph->advanceX;  // 12.4 fixed-point
+      prevAdvanceFP = advanceForRender(glyph->advanceX, syntheticBold, halfSize);
       prevCp = cp;
     }
   }
 }
 
-void EpdFont::getTextDimensions(const char* string, int* w, int* h) const {
+void EpdFont::getTextDimensions(const char* string, int* w, int* h, const bool syntheticBold,
+                                const bool halfSize) const {
   int minX = 0, minY = 0, maxX = 0, maxY = 0;
 
-  getTextBounds(string, 0, 0, &minX, &minY, &maxX, &maxY);
+  getTextBounds(string, 0, 0, &minX, &minY, &maxX, &maxY, syntheticBold, halfSize);
 
   *w = maxX - minX;
   *h = maxY - minY;

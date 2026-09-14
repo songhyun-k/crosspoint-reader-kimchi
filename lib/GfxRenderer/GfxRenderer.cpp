@@ -376,6 +376,7 @@ enum class TextRotation { None, Rotated90CW };
 //
 // The advance width is also halved in drawText() so layout reserves exactly the right
 // horizontal space for the scaled glyph.
+template <TextRotation rotation = TextRotation::None>
 static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
                              const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
                              const bool pixelState, const EpdFontFamily::Style style) {
@@ -394,6 +395,18 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
   // pixel offset from the (already-shifted) cursor position.
   const int baseX = cursorX + glyph->left / 2;
   const int baseY = cursorY - glyph->top / 2;
+  const bool syntheticBold = fontFamily.needsSyntheticBold(style);
+  const auto drawInk = [&](const int dx, const int dy) {
+    if constexpr (rotation == TextRotation::Rotated90CW) {
+      const int x = cursorX + fontData->ascender - glyph->top / 2 + dy;
+      const int y = cursorY - glyph->left / 2 - dx;
+      renderer.drawPixel(x, y, pixelState);
+      if (syntheticBold) renderer.drawPixel(x, y - 1, pixelState);
+    } else {
+      renderer.drawPixel(baseX + dx, baseY + dy, pixelState);
+      if (syntheticBold) renderer.drawPixel(baseX + dx + 1, baseY + dy, pixelState);
+    }
+  };
 
   if (fontData->is2Bit) {
     // 2-bit packed format: 4 pixels per byte, MSB first, 2 bits per pixel.
@@ -414,7 +427,7 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
           }
         }
         if (maxRaw >= 2 || coverage >= 2) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+          drawInk(dstX, dstY);
         }
       }
     }
@@ -436,7 +449,7 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
           }
         }
         if (hasInk) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+          drawInk(dstX, dstY);
         }
       }
     }
@@ -459,6 +472,8 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
   const uint8_t height = glyph->height;
   const int left = glyph->left;
   const int top = glyph->top;
+  const bool syntheticBold = fontFamily.needsSyntheticBold(style);
+  const int drawWidth = width + (syntheticBold && width > 0 && height > 0 ? 1 : 0);
 
   // Tiled-grayscale band culling: if this glyph's physical y-extent is entirely
   // outside the active strip, skip it before the expensive bitmap decode. This
@@ -466,13 +481,13 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
   if constexpr (rotation == TextRotation::Rotated90CW) {
     const int ob = cursorX + fontData->ascender - top;
     const int ib = cursorY - left;
-    if (!renderer.glyphIntersectsStrip(ob, ib - (width - 1), ob + height - 1, ib)) {
+    if (!renderer.glyphIntersectsStrip(ob, ib - (drawWidth - 1), ob + height - 1, ib)) {
       return;
     }
   } else {
     const int gx0 = cursorX + left;
     const int gy0 = cursorY - top;
-    if (!renderer.glyphIntersectsStrip(gx0, gy0, gx0 + width - 1, gy0 + height - 1)) {
+    if (!renderer.glyphIntersectsStrip(gx0, gy0, gx0 + drawWidth - 1, gy0 + height - 1)) {
       return;
     }
   }
@@ -492,10 +507,9 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     }
 
     if (is2Bit) {
-      int pixelPosition = 0;
       for (int glyphY = 0; glyphY < height; glyphY++) {
         const int outerCoord = outerBase + glyphY;
-        for (int glyphX = 0; glyphX < width; glyphX++, pixelPosition++) {
+        for (int glyphX = 0; glyphX < drawWidth; glyphX++) {
           int screenX, screenY;
           if constexpr (rotation == TextRotation::Rotated90CW) {
             screenX = outerCoord;
@@ -505,12 +519,18 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
             screenY = outerCoord;
           }
 
-          const uint8_t byte = bitmap[pixelPosition >> 2];
-          const uint8_t bit_index = (3 - (pixelPosition & 3)) * 2;
+          const auto rawAt = [&](const int column) -> uint8_t {
+            if (column < 0 || column >= width) return 0;
+            const int position = glyphY * width + column;
+            return (bitmap[position >> 2] >> ((3 - (position & 3)) * 2)) & 3;
+          };
+          // Merge coverage before selecting a gray plane. Copying plane bits
+          // separately could turn a black overlap back into gray.
+          const uint8_t raw = syntheticBold ? std::max(rawAt(glyphX), rawAt(glyphX - 1)) : rawAt(glyphX);
           // the direct bit from the font is 0 -> white, 1 -> light gray, 2 -> dark gray, 3 -> black
           // we swap this to better match the way images and screen think about colors:
           // 0 -> black, 1 -> dark grey, 2 -> light grey, 3 -> white
-          const uint8_t bmpVal = 3 - ((byte >> bit_index) & 0x3);
+          const uint8_t bmpVal = 3 - raw;
 
           if (renderMode == GfxRenderer::BW && bmpVal < 3) {
             // Black (also paints over the grays in BW mode)
@@ -527,10 +547,9 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
         }
       }
     } else {
-      int pixelPosition = 0;
       for (int glyphY = 0; glyphY < height; glyphY++) {
         const int outerCoord = outerBase + glyphY;
-        for (int glyphX = 0; glyphX < width; glyphX++, pixelPosition++) {
+        for (int glyphX = 0; glyphX < drawWidth; glyphX++) {
           int screenX, screenY;
           if constexpr (rotation == TextRotation::Rotated90CW) {
             screenX = outerCoord;
@@ -540,10 +559,12 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
             screenY = outerCoord;
           }
 
-          const uint8_t byte = bitmap[pixelPosition >> 3];
-          const uint8_t bit_index = 7 - (pixelPosition & 7);
-
-          if ((byte >> bit_index) & 1) {
+          const auto inkAt = [&](const int column) {
+            if (column < 0 || column >= width) return false;
+            const int position = glyphY * width + column;
+            return ((bitmap[position >> 3] >> (7 - (position & 7))) & 1) != 0;
+          };
+          if (inkAt(glyphX) || (syntheticBold && inkAt(glyphX - 1))) {
             renderer.drawPixel(screenX, screenY, pixelState);
           }
         }
@@ -711,18 +732,12 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     lastBaseLeft = glyph ? glyph->left : 0;
     lastBaseWidth = glyph ? glyph->width : 0;
     lastBaseTop = glyph ? glyph->top : 0;
-    prevAdvanceFP = glyph ? glyph->advanceX : 0;  // 12.4 fixed-point
-
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
-    if (isSupSub) {
-      // Halve the advance so the cursor advances by the same amount the scaled glyph
-      // actually occupies, keeping spacing correct without needing a separate smaller font.
-      prevAdvanceFP = (prevAdvanceFP + 1) / 2;
-    }
+    prevAdvanceFP = EpdFont::advanceForRender(glyph ? glyph->advanceX : 0, font.needsSyntheticBold(style), isSupSub);
 
     if (isSupSub) {
       // yPos already carries the vertical offset applied by TextBlock::render().
-      renderCharScaled(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
+      renderCharScaled<TextRotation::None>(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
     } else {
       renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
     }
@@ -1960,11 +1975,14 @@ bool GfxRenderer::copyBufferToRegion(int lx, int ly, int lw, int lh, const uint8
 }
 
 int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style style) const {
+  const auto family = fontMap.find(fontId);
+  if (family == fontMap.end()) return 0;
+  const bool syntheticBold = family->second.needsSyntheticBold(style);
   // Advance table fast-path for SD card fonts during layout
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    return fp4::toPixel(sdIt->second->getAdvance(' ', resolvedStyle));
+    return fp4::toPixel(EpdFont::advanceForRender(sdIt->second->getAdvance(' ', resolvedStyle), syntheticBold));
   }
 
   const auto fontIt = fontMap.find(fontId);
@@ -1974,18 +1992,21 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
   }
 
   const EpdGlyph* spaceGlyph = fontIt->second.getGlyph(' ', style);
-  return spaceGlyph ? fp4::toPixel(spaceGlyph->advanceX) : 0;  // snap 12.4 fixed-point to nearest pixel
+  return spaceGlyph ? fp4::toPixel(EpdFont::advanceForRender(spaceGlyph->advanceX, syntheticBold)) : 0;
 }
 
 int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
                                  const EpdFontFamily::Style style) const {
+  const auto family = fontMap.find(fontId);
+  if (family == fontMap.end()) return 0;
+  const bool syntheticBold = family->second.needsSyntheticBold(style);
   // Advance table fast-path for SD card fonts during layout.
   // Kern data is not loaded during layout (consistent with previous metadataOnly behavior),
   // so we return just the space advance without kerning.
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    return fp4::toPixel(sdIt->second->getAdvance(' ', resolvedStyle));
+    return fp4::toPixel(EpdFont::advanceForRender(sdIt->second->getAdvance(' ', resolvedStyle), syntheticBold));
   }
 
   const auto fontIt = fontMap.find(fontId);
@@ -1997,7 +2018,7 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
   // Snapping the combined value avoids the +/-1 px error from snapping each component separately.
   const int32_t kernFP = static_cast<int32_t>(font.getKerning(leftCp, ' ', style)) +
                          static_cast<int32_t>(font.getKerning(' ', rightCp, style));
-  return fp4::toPixel(spaceAdvanceFP + kernFP);
+  return fp4::toPixel(EpdFont::advanceForRender(spaceAdvanceFP, syntheticBold) + kernFP);
 }
 
 int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint32_t rightCp,
@@ -2009,6 +2030,7 @@ int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint3
 }
 
 int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFamily::Style style) const {
+  if (!text || !*text) return 0;
   // Match the font drawText would use for CJK-bearing strings (see resolveTextFontId).
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
   // Measure the exact codepoint stream drawText renders: bidi-reordered and
@@ -2019,35 +2041,6 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   // right margin.
   std::string visual;
   text = resolveVisualText(text, visual, BidiUtils::BidiBaseDir::AUTO);
-
-  // Advance table fast-path for SD card fonts during layout.
-  // No kerning/ligature lookup — consistent with previous metadataOnly behavior
-  // where kern/lig data was not loaded.
-  auto sdIt = sdCardFonts_.find(resolvedFontId);
-  if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
-    int32_t widthFP = 0;
-    const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
-    const uint8_t styleIdx = resolveSdCardStyle(*sdIt->second, style);
-    const auto fontIt = fontMap.find(resolvedFontId);
-    if (fontIt == fontMap.end()) {
-      LOG_ERR("GFX", "Font %d not found", resolvedFontId);
-      return 0;
-    }
-    const auto& font = fontIt->second;
-    while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
-      // RTL vowel marks (niqqud/harakat) are zero-advance overlays in drawText — no width.
-      if (BidiUtils::isTransparentMark(cp)) {
-        continue;
-      }
-      int32_t advFP = sdIt->second->getAdvance(cp, styleIdx);
-      if (advFP == 0 && !utf8IsCombiningMark(cp)) {
-        const EpdGlyph* glyph = font.getGlyph(cp, style);
-        advFP = glyph ? glyph->advanceX : 0;
-      }
-      widthFP += isSupSub ? (advFP + 1) / 2 : advFP;
-    }
-    return fp4::toPixel(widthFP);
-  }
 
   const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) {
@@ -2060,6 +2053,11 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   int widthPx = 0;
   int32_t prevAdvanceFP = 0;  // 12.4 fixed-point: prev glyph's advance + next kern for snap
   const auto& font = fontIt->second;
+  const bool syntheticBold = font.needsSyntheticBold(style);
+  const bool halfSize = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
+  const auto sdIt = sdCardFonts_.find(resolvedFontId);
+  const SdCardFont* sd = sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable() ? sdIt->second : nullptr;
+  const uint8_t styleIdx = sd ? resolveSdCardStyle(*sd, style) : 0;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
     // RTL vowel marks (niqqud/harakat) are zero-advance overlays in drawText — no width.
     if (BidiUtils::isTransparentMark(cp)) {
@@ -2077,11 +2075,12 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       widthPx += fp4::toPixel(prevAdvanceFP + kernFP);         // snap 12.4 fixed-point to nearest pixel
     }
 
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
-    prevAdvanceFP = glyph ? glyph->advanceX : 0;
-    if ((style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
-      prevAdvanceFP = (prevAdvanceFP + 1) / 2;
+    int32_t advance = sd ? sd->getAdvance(cp, styleIdx) : 0;
+    if (advance == 0) {
+      const EpdGlyph* glyph = font.getGlyph(cp, style);
+      advance = glyph ? glyph->advanceX : 0;
     }
+    prevAdvanceFP = EpdFont::advanceForRender(advance, syntheticBold, halfSize);
     prevCp = cp;
   }
   widthPx += fp4::toPixel(prevAdvanceFP);  // final glyph's advance
@@ -2186,9 +2185,13 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
     lastBaseLeft = glyph ? glyph->left : 0;
     lastBaseWidth = glyph ? glyph->width : 0;
     lastBaseTop = glyph ? glyph->top : 0;
-    prevAdvanceFP = glyph ? glyph->advanceX : 0;  // 12.4 fixed-point
-
-    renderCharImpl<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, lastBaseY, black, style);
+    const bool halfSize = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
+    prevAdvanceFP = EpdFont::advanceForRender(glyph ? glyph->advanceX : 0, font.needsSyntheticBold(style), halfSize);
+    if (halfSize) {
+      renderCharScaled<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, lastBaseY, black, style);
+    } else {
+      renderCharImpl<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, lastBaseY, black, style);
+    }
     prevCp = cp;
   }
 }

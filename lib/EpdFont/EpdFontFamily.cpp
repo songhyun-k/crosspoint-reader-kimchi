@@ -1,25 +1,22 @@
 #include "EpdFontFamily.h"
 
 const EpdFont* EpdFontFamily::getFont(const Style style) const {
-  // Extract font style bits; render-time overlay bits do not affect font selection.
-  const bool hasBold = (style & BOLD) != 0;
-  const bool hasItalic = (style & ITALIC) != 0;
+  const EpdFont* fonts[] = {regular, bold, italic, boldItalic};
+  const uint8_t mask = (regular ? 1 : 0) | (bold ? 2 : 0) | (italic ? 4 : 0) | (boldItalic ? 8 : 0);
+  return fonts[resolveStyle(static_cast<uint8_t>(style), mask)];
+}
 
-  if (hasBold && hasItalic) {
-    if (boldItalic) return boldItalic;
-    if (bold) return bold;
-    if (italic) return italic;
-  } else if (hasBold && bold) {
-    return bold;
-  } else if (hasItalic && italic) {
-    return italic;
-  }
-
-  return regular;
+bool EpdFontFamily::needsSyntheticBold(const Style style) const {
+  if (!(style & BOLD)) return false;
+  const auto* resolved = getFont(style);
+  if (!resolved) return false;
+  const bool isBoldFace = resolved == bold || resolved == boldItalic;
+  const bool aliasesNormal = (regular && resolved->data == regular->data) || (italic && resolved->data == italic->data);
+  return !isBoldFace || aliasesNormal;
 }
 
 void EpdFontFamily::getTextDimensions(const char* string, int* w, int* h, const Style style) const {
-  getFont(style)->getTextDimensions(string, w, h);
+  getFont(style)->getTextDimensions(string, w, h, needsSyntheticBold(style), (style & (SUP | SUB)) != 0);
 }
 
 const EpdFontData* EpdFontFamily::getData(const Style style) const { return getFont(style)->data; }

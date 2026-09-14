@@ -32,6 +32,19 @@ class EpdFontFamily {
   bool hasCodepoint(uint32_t cp, Style style = REGULAR) const;
   int8_t getKerning(uint32_t leftCp, uint32_t rightCp, Style style = REGULAR) const;
   uint32_t applyLigatures(uint32_t cp, const char*& text, Style style = REGULAR) const;
+  bool needsSyntheticBold(Style style) const;
+  // Shared with SdCardFont so cached advances and the selected raster use the
+  // same physical style even for single-style files without a regular face.
+  static constexpr uint8_t resolveStyle(uint8_t requested, uint8_t presentMask) {
+    constexpr uint8_t fallbacks[4][4] = {{REGULAR, BOLD, ITALIC, BOLD_ITALIC},
+                                         {BOLD, REGULAR, BOLD_ITALIC, ITALIC},
+                                         {ITALIC, REGULAR, BOLD_ITALIC, BOLD},
+                                         {BOLD_ITALIC, BOLD, ITALIC, REGULAR}};
+    for (const uint8_t candidate : fallbacks[requested & 3]) {
+      if (presentMask & (1u << candidate)) return candidate;
+    }
+    return REGULAR;
+  }
   static constexpr bool hasTextDecoration(const Style style) {
     return (static_cast<uint8_t>(style) & TEXT_DECORATION_MASK) != 0;
   }

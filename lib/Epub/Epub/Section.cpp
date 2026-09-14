@@ -48,7 +48,8 @@ namespace {
 // v44: Persist internal-link rectangles with each page for touch navigation.
 // v45: Internal EPUB links preserve CSS superscript/subscript positioning.
 // v46: Pattern-free builds no longer use language tries for oversized-word breaks.
-constexpr uint8_t SECTION_FILE_VERSION = 46;
+// v47: Synthetic Bold and SD differential rounding change glyph advances.
+constexpr uint8_t SECTION_FILE_VERSION = 47;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

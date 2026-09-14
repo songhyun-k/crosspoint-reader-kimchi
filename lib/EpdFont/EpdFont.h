@@ -2,13 +2,21 @@
 #include "EpdFontData.h"
 
 class EpdFont {
-  void getTextBounds(const char* string, int startX, int startY, int* minX, int* minY, int* maxX, int* maxY) const;
+  void getTextBounds(const char* string, int startX, int startY, int* minX, int* minY, int* maxX, int* maxY,
+                     bool syntheticBold, bool halfSize) const;
 
  public:
   const EpdFontData* data;
   explicit EpdFont(const EpdFontData* data) : data(data) {}
   ~EpdFont() = default;
-  void getTextDimensions(const char* string, int* w, int* h) const;
+  void getTextDimensions(const char* string, int* w, int* h, bool syntheticBold = false, bool halfSize = false) const;
+
+  // Emboldening is one output pixel, including at SUP/SUB scale. Zero-advance
+  // marks stay overlays; all advancing glyphs use the same spacing contract.
+  static constexpr int32_t advanceForRender(int32_t advance, bool syntheticBold, bool halfSize = false) {
+    if (halfSize) advance = (advance + 1) / 2;
+    return syntheticBold && advance > 0 ? advance + fp4::fromPixel(1) : advance;
+  }
 
   const EpdGlyph* getGlyph(uint32_t cp) const;
 

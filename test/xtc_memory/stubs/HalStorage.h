@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -82,6 +83,7 @@ struct TestEsp {
   uint32_t maxAlloc = 1024 * 1024;
   uint32_t getFreeHeap() const { return freeHeap; }
   uint32_t getMaxAllocHeap() const { return maxAlloc; }
+  void restart() { std::abort(); }
 };
 inline TestEsp ESP;
 inline unsigned long millis() { return 0; }

@@ -92,6 +92,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 47
+
+Version 47 preserves the version 46 serialized layout and invalidates old word
+positions: synthetic Bold now adds one output pixel to advancing glyphs and SD
+advance-table measurement uses the same differential rounding as drawing.
+The partial-cache sentinel changes with the version as before.
+
 ### Version 46
 
 Version 46 preserves the version 45 serialized layout. The kimchi pattern-free
