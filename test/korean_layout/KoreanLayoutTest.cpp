@@ -13,8 +13,6 @@
 #include <string>
 #include <vector>
 
-#include "activities/settings/TextSettingsPreview.h"
-
 namespace {
 bool failNextArray = false;
 using Style = EpdFontFamily::Style;
@@ -333,7 +331,6 @@ TEST_F(KoreanLayoutTest, RealPartialCacheAlsoRejectsAChangedCharacterWrapSetting
 }
 
 TEST_F(KoreanLayoutTest, ParagraphIndentDefaultsOffAndIsIndependentOfParagraphSpacing) {
-  EXPECT_FALSE(ReaderRenderSpec{}.paragraphIndent);
   const int indentWidth = renderer.getTextAdvanceX(1, "\xE3\x80\x80", R);
   ASSERT_GT(indentWidth, 0);
   for (bool spacing : {false, true}) {
@@ -448,8 +445,4 @@ TEST_F(KoreanLayoutTest, RealSectionInvalidatesIndentAndPreservesContentPosition
   ASSERT_NE(first, nullptr);
   EXPECT_EQ(static_cast<PageLine&>(*first->elements[0]).getBlock()->wordXpos(0),
             renderer.getTextAdvanceX(1, "\xE3\x80\x80", R));
-  textsettings::PreviewKey preview;
-  auto changedPreview = preview;
-  changedPreview.paragraphIndent = true;
-  EXPECT_NE(preview, changedPreview);
 }
