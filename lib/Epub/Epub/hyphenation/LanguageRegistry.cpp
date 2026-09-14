@@ -1,5 +1,9 @@
 #include "LanguageRegistry.h"
 
+#include "HyphenationConfig.h"
+
+#if CP_HYPHENATION_LANGS
+
 #include <algorithm>
 #include <array>
 
@@ -58,3 +62,11 @@ LanguageEntryView getLanguageEntries() {
   const auto& allEntries = entries();
   return LanguageEntryView{allEntries.data(), allEntries.size()};
 }
+
+#else
+
+const LanguageHyphenator* getLanguageHyphenatorForPrimaryTag(const std::string&) { return nullptr; }
+
+LanguageEntryView getLanguageEntries() { return LanguageEntryView{nullptr, 0}; }
+
+#endif

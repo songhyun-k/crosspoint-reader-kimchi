@@ -16,7 +16,7 @@ struct LanguageEntryView {
   size_t size;
 
   const LanguageEntry* begin() const { return data; }
-  const LanguageEntry* end() const { return data + size; }
+  const LanguageEntry* end() const { return size == 0 ? data : data + size; }
 };
 
 // Returns the Liang-backed hyphenator for a given primary language tag (e.g., "en", "fr").

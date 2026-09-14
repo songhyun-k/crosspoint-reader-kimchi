@@ -105,6 +105,11 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
   doc["language"] = (language < getLanguageCount()) ? LANGUAGE_CODES[language] : "EN";
 
+#if !CP_HYPHENATION_LANGS
+  // Keep saved/manual settings truthful even though the unavailable toggle is hidden.
+  doc["hyphenationEnabled"] = 0;
+#endif
+
   // A uint16_t mask, so it does not fit the uint8_t generic loop. Omitted while
   // unconfigured, so the default keeps following the UI language.
   if (keyboardLayouts != 0) {
@@ -233,6 +238,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     keyboardLayouts = doc["keyboardLayouts"].as<uint16_t>();
   }
 
+#if !CP_HYPHENATION_LANGS
+  if ((doc["hyphenationEnabled"] | 0) != 0) needsResave = true;
+  hyphenationEnabled = 0;
+#endif
+
   if (needsResave) {
     LOG_DBG("CPS", "Resaving settings to update format");
     requestResave();
@@ -269,7 +279,7 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   spec.paragraphAlignment = paragraphAlignment;
   spec.viewportWidth = viewportWidth;
   spec.viewportHeight = viewportHeight;
-  spec.hyphenationEnabled = hyphenationEnabled != 0;
+  spec.hyphenationEnabled = isHyphenationEnabled();
   spec.embeddedStyle = embeddedStyle != 0;
   spec.imageRendering = imageRendering;
   spec.focusReadingEnabled = focusReadingEnabled != 0;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Epub/hyphenation/HyphenationConfig.h>
 #include <SdCardFontRegistry.h>
 
 #include <cstdint>
@@ -30,7 +31,15 @@ class TextSettingsActivity final : public UiTabListActivity {
   // Row indices per tab. enum class (not plain enum) so a LayoutRow can't be
   // silently confused with a StyleRow of equal value.
   enum class LayoutRow { LineSpacing, ParaSpacing, Alignment, ScreenMargin, Count };
-  enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
+  enum class StyleRow {
+    FocusReading,
+#if CP_HYPHENATION_LANGS
+    Hyphenation,
+#endif
+    EmbeddedStyle,
+    AntiAliasing,
+    Count
+  };
 
   // --- UiTabListActivity contract ---
   int listCount() const override;

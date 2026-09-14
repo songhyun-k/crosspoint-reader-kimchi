@@ -92,6 +92,14 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 46
+
+Version 46 preserves the version 45 serialized layout. The kimchi pattern-free
+build changes emergency word breaking, including when the old hyphenation
+setting was off, so both complete and partial older caches must be rebuilt.
+Explicit/soft hyphens and CJK break opportunities remain independent of language
+pattern data. The partial-cache sentinel follows the section version automatically.
+
 ### Version 45
 
 Version 45 keeps the version 44 serialized layout unchanged. It was bumped
