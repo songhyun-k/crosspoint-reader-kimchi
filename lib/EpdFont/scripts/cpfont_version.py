@@ -13,3 +13,15 @@ CPFONT_VERSION = 4
 
 # JSON manifest schema version. Bump when the manifest shape changes.
 FONTS_MANIFEST_VERSION = 1
+
+# kimchi uses one repository for firmware and font assets, but font releases
+# must not replace the firmware's GitHub "latest" release (deployment handoff).
+FONT_RELEASE_REPOSITORY = "songhyun-k/crosspoint-reader-kimchi"
+
+
+def font_release_tag() -> str:
+    return f"sd-fonts-m{FONTS_MANIFEST_VERSION}-b{CPFONT_VERSION}"
+
+
+def font_release_base_url() -> str:
+    return f"https://github.com/{FONT_RELEASE_REPOSITORY}/releases/download/{font_release_tag()}/"

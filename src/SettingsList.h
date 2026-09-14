@@ -22,7 +22,7 @@
 // are appended after the built-in fonts. Otherwise only built-in fonts are listed.
 inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   // Built-in font labels (StrId)
-  std::vector<StrId> enumValues = {StrId::STR_NOTO_SERIF, StrId::STR_NOTO_SANS};
+  std::vector<StrId> enumValues = {StrId::STR_NOTO_SERIF, StrId::STR_NOTO_SANS, StrId::STR_KIMCHI_BATANG};
   // Runtime string labels for SD card fonts
   std::vector<std::string> enumStringValues;
 
@@ -43,8 +43,10 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   // with all options when SD fonts are present.
   std::vector<std::string> allStringValues;
   if (sdFontCount > 0) {
+    allStringValues.reserve(CrossPointSettings::BUILTIN_FONT_COUNT + sdFontCount);
     allStringValues.push_back(I18N.get(StrId::STR_NOTO_SERIF));
     allStringValues.push_back(I18N.get(StrId::STR_NOTO_SANS));
+    allStringValues.push_back(I18N.get(StrId::STR_KIMCHI_BATANG));
     allStringValues.insert(allStringValues.end(), enumStringValues.begin(), enumStringValues.end());
   }
 
@@ -76,12 +78,12 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
       }
       // SD font name not found in registry — fall through to built-in
     }
-    return SETTINGS.fontFamily < CrossPointSettings::BUILTIN_FONT_COUNT ? SETTINGS.fontFamily : 0;
+    return builtinReaderFamilyIndex(SETTINGS.fontFamily);
   };
 
   s.valueSetter = [sdFamilyNames](uint8_t v) {
     if (v < CrossPointSettings::BUILTIN_FONT_COUNT) {
-      SETTINGS.fontFamily = v;
+      SETTINGS.fontFamily = builtinReaderFamilyAt(v);
       SETTINGS.sdFontFamilyName[0] = '\0';
     } else {
       int sdIdx = v - CrossPointSettings::BUILTIN_FONT_COUNT;
@@ -104,7 +106,7 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
 inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
   // Captured by copy: getSettingsList() returns by value and the lambdas outlive
   // this call, so they must not reference the registry.
-  const std::vector<uint8_t> sizes = readerFontPointSizes(registry, SETTINGS.sdFontFamilyName);
+  const std::vector<uint8_t> sizes = readerFontPointSizes(registry, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
 
   // "pt" is deliberately not translated — see the matching note in
   // TextSettingsActivity::rebuildSizeList().

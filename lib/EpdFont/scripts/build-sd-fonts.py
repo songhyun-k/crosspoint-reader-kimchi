@@ -39,6 +39,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import yaml
+from cpfont_version import font_release_base_url
 
 SCRIPT_DIR = Path(__file__).parent
 FONTCONVERT = SCRIPT_DIR / "fontconvert_sdcard.py"
@@ -325,7 +326,8 @@ def main():
     )
     parser.add_argument("--only", help="Comma-separated family names to build (default: all)")
     parser.add_argument("--manifest", action="store_true", help="Also generate fonts.json manifest")
-    parser.add_argument("--base-url", default="", help="Base URL for manifest (required with --manifest)")
+    parser.add_argument("--base-url", default=font_release_base_url(),
+                        help="Manifest asset base URL (default: kimchi repository and actual format/schema versions)")
     parser.add_argument(
         "--manifest-output", default=None, help="Manifest output path (default: <output-dir>/fonts.json)"
     )
@@ -343,9 +345,6 @@ def main():
         help="Per-family timeout in seconds (default: 600)"
     )
     args = parser.parse_args()
-
-    if args.manifest and not args.base_url:
-        parser.error("--base-url is required when using --manifest")
 
     # Load config
     config_path = Path(args.config)

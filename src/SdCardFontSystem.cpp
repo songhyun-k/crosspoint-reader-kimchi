@@ -29,10 +29,10 @@ struct UiFontSize {
   uint8_t pointSize;
 };
 constexpr UiFontSize kUiFontSizes[] = {
-    {SMALL_FONT_ID, 8},
     {UI_10_FONT_ID, 10},
-    {UI_12_FONT_ID, 12},
 };
+static_assert(UI_10_FONT_ID == UI_12_FONT_ID && UI_10_FONT_ID == SMALL_FONT_ID,
+              "kimchi UI roles share the same built-in Pretendard-derived 10pt font");
 
 }  // namespace
 
@@ -87,8 +87,7 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
     }
     // Back on a built-in family, which exists only at BUILTIN_READER_POINT_SIZES:
     // a size inherited from an SD family has to come back into that set.
-    snapFontPointSizeTo(snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES),
-                                               SETTINGS.fontPointSize));
+    snapFontPointSizeTo(snapToBuiltinPointSize(SETTINGS.fontPointSize, SETTINGS.fontFamily));
     return;
   }
 

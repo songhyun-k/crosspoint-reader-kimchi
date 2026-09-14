@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "baseUrl": "https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/sd-fonts-m1-b4/",
+  "scriptGroups": [
+    {
+      "tag": "latin",
+      "label": "Latin"
+    },
+    {
+      "tag": "cyrillic",
+      "label": "Cyrillic"
+    },
+    {
+      "tag": "greek",
+      "label": "Greek"
+    },
+    {
+      "tag": "georgian",
+      "label": "Georgian"
+    },
+    {
+      "tag": "armenian",
+      "label": "Armenian"
+    },
+    {
+      "tag": "ethiopic",
+      "label": "Ethiopic"
+    },
+    {
+      "tag": "cjk",
+      "label": "CJK"
+    },
+    {
+      "tag": "hangul",
+      "label": "Korean"
+    }
+  ],
+  "families": [
+    {
+      "name": "KimchiBatang",
+      "description": "KoPub Batang Light source; Korean 11,172 syllables and 4,620 Hanja",
+      "styles": [
+        "regular"
+      ],
+      "scripts": [
+        "latin",
+        "hangul",
+        "cjk"
+      ],
+      "files": [
+        {
+          "name": "KimchiBatang_12.cpfont",
+          "size": 2463088,
+          "crc32": 3945676625
+        },
+        {
+          "name": "KimchiBatang_14.cpfont",
+          "size": 3248413,
+          "crc32": 1460147617
+        },
+        {
+          "name": "KimchiBatang_16.cpfont",
+          "size": 4044109,
+          "crc32": 1063336910
+        },
+        {
+          "name": "KimchiBatang_18.cpfont",
+          "size": 5209657,
+          "crc32": 2215827015
+        }
+      ]
+    },
+    {
+      "name": "NotoSansExtended",
+      "description": "Sans-serif (Latin, Greek, Cyrillic, Georgian, Armenian, Ethiopic)",
+      "styles": [
+        "regular",
+        "bold",
+        "italic",
+        "bolditalic"
+      ],
+      "scripts": [
+        "latin",
+        "cyrillic",
+        "greek",
+        "georgian",
+        "armenian",
+        "ethiopic"
+      ],
+      "files": [
+        {
+          "name": "NotoSansExtended_12.cpfont",
+          "size": 683134,
+          "crc32": 226707673
+        },
+        {
+          "name": "NotoSansExtended_14.cpfont",
+          "size": 860652,
+          "crc32": 497246336
+        },
+        {
+          "name": "NotoSansExtended_16.cpfont",
+          "size": 1060619,
+          "crc32": 815765497
+        },
+        {
+          "name": "NotoSansExtended_18.cpfont",
+          "size": 1285029,
+          "crc32": 2314411641
+        }
+      ]
+    }
+  ]
+}

@@ -18,6 +18,8 @@
 
 namespace {
 
+static_assert(CrossPointSettings::KOPUB == KOPUB_READER_FAMILY, "Keep persisted KoPub family ID stable");
+
 // Stack buffer for "<key>_obf" key construction — avoids a std::string
 // allocation per obfuscated setting on every save and load.
 constexpr size_t OBF_KEY_BUF = 64;
@@ -209,8 +211,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   fontPointSize = storedFontSize;
 
   // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
-  const uint8_t storedFontFamily = doc["fontFamily"] | (uint8_t)0;
-  fontFamily = clamp(storedFontFamily, BUILTIN_FONT_COUNT, 0);
+  const uint8_t storedFontFamily = doc["fontFamily"] | static_cast<uint8_t>(KOPUB);
+  fontFamily = isBuiltinReaderFamily(storedFontFamily) ? storedFontFamily : static_cast<uint8_t>(KOPUB);
   // SD card font family name — not in SettingsList, load manually
   const char* sfn = doc["sdFontFamilyName"] | "";
   strncpy(sdFontFamilyName, sfn, sizeof(sdFontFamilyName) - 1);
@@ -220,7 +222,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     strncpy(sdFontFamilyName, "OpenDyslexic", sizeof(sdFontFamilyName) - 1);
     sdFontFamilyName[sizeof(sdFontFamilyName) - 1] = '\0';
     needsResave = true;
-  } else if (storedFontFamily >= BUILTIN_FONT_COUNT) {
+  } else if (!isBuiltinReaderFamily(storedFontFamily)) {
     needsResave = true;
   }
   // Dictionary folder name — uses dynamic getter/setter in SettingsList, load manually
@@ -362,8 +364,7 @@ int CrossPointSettings::getRefreshFrequency() const {
 
 void CrossPointSettings::clearSdFontFamily() {
   sdFontFamilyName[0] = '\0';
-  fontPointSize =
-      snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
+  fontPointSize = snapToBuiltinPointSize(fontPointSize, fontFamily);
   saveToFile();
 }
 
@@ -379,8 +380,8 @@ int CrossPointSettings::getReaderFontId() const {
   // carried over from an SD family may not be one of them. ensureLoaded()
   // normally persists the snap; snap again here (without allocating — this runs
   // in the page render loop) so rendering is correct even before it has run.
-  const uint8_t pt =
-      snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
+  if (fontFamily == KOPUB) return KIMCHI_BATANG_14_FONT_ID;
+  const uint8_t pt = snapToBuiltinPointSize(fontPointSize, fontFamily);
   const bool sans = (fontFamily == NOTOSANS);
   switch (pt) {
     case 12:

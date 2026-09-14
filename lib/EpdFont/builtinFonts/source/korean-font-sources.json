@@ -1,0 +1,42 @@
+{
+  "koCommit": "84a39194dfce1ebd772ac9163df0a59daa0d72dc",
+  "freeType": "2.13.2",
+  "fonts": {
+    "KoPub-Batang/KoPub Batang Light.ttf": {
+      "sha256": "b7438d61595fe9584706ab2cb3c9aa2acdc486d61c8299374a30b3e77bc2045f",
+      "sourceNamesAndNotices": [
+        "nameID 0: Copyright (c) 2018 Korea Publisher Society. All rights reserved. Font designed by FONTRIX Inc.",
+        "nameID 0: Copyright (c) 2018 한국출판인회의. All rights reserved. Font designed by FONTRIX Inc.",
+        "nameID 1: KoPubBatang",
+        "nameID 1: KoPubBatang Light",
+        "nameID 1: KoPub바탕체",
+        "nameID 1: KoPub바탕체 Light",
+        "nameID 2: Light",
+        "nameID 5: Version 2.1.1; Build Release",
+        "nameID 8: Korea Publisher Society",
+        "nameID 8: 한국출판인회의",
+        "nameID 9: Park Yong-rak; Yoon Jae-hyun; Lee Sang-min; Kim Jung-jin; Park Han-ung; Kim Min-ju;",
+        "nameID 9: 박용락; 윤재현; 이상민; 김정진; 박한웅; 김민주;"
+      ],
+      "hangulSyllables": 11172,
+      "hanja": 4620
+    },
+    "Pretendard/Pretendard-Regular.ttf": {
+      "sha256": "6d0af5258997aec7354a6e340fc2325ba321c410ca48b3af858c8c3d6e92a324",
+      "sourceNamesAndNotices": [
+        "nameID 0: Copyright © 2023 Kil Hyung-jin",
+        "nameID 0: Copyright © 2023 길형진",
+        "nameID 13: This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: http://scripts.sil.org/OFL",
+        "nameID 14: http://scripts.sil.org/OFL",
+        "nameID 1: Pretendard",
+        "nameID 2: Regular",
+        "nameID 5: Version 1.309",
+        "nameID 8: Kil Hyung-jin",
+        "nameID 8: 길형진",
+        "nameID 9: Base glyphs from Inter by Rasmus Andersson; Hangeul glyphs from Noto Sans CJK(Source Han Sans) by Jang Soo-young and Kang Joo-yeon, Sandoll Communications; Kana glyphs from M PLUS 1p by Coji Morishita, UNDERFOREST DESIGN; Combined and redesigned to Pretendard by Kil Hyung-jin."
+      ],
+      "hangulSyllables": 11172,
+      "hanja": 0
+    }
+  }
+}

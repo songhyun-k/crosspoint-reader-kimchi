@@ -1773,11 +1773,11 @@ std::string EpubReaderActivity::textRowName(int row) const {
 }
 
 std::string EpubReaderActivity::textRowValue(int row) const {
-  static constexpr StrId kFamily[] = {StrId::STR_NOTO_SERIF, StrId::STR_NOTO_SANS};
+  static constexpr StrId kFamily[] = {StrId::STR_NOTO_SERIF, StrId::STR_NOTO_SANS, StrId::STR_KIMCHI_BATANG};
   switch (row) {
     case 0:
       if (SETTINGS.sdFontFamilyName[0] != '\0') return SETTINGS.sdFontFamilyName;
-      return I18N.get(kFamily[SETTINGS.fontFamily % CrossPointSettings::FONT_FAMILY_COUNT]);
+      return I18N.get(kFamily[builtinReaderFamilyIndex(SETTINGS.fontFamily)]);
     case 1:
       return std::to_string(SETTINGS.fontPointSize) + " pt";
     case 2:
@@ -1805,7 +1805,7 @@ void EpubReaderActivity::showTextRowPopup(const int row) {
   switch (row) {
     case 1: {
       // The point sizes the active family actually ships.
-      const auto sizes = readerFontPointSizes(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName);
+      const auto sizes = readerFontPointSizes(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
       if (sizes.empty()) return;
       std::vector<std::string> labels;
       labels.reserve(sizes.size());

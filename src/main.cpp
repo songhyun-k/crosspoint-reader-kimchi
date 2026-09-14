@@ -113,16 +113,12 @@ EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, 
 
 #endif  // OMIT_FONTS
 
-EpdFont smallFont(&notosans_8_regular);
-EpdFontFamily smallFontFamily(&smallFont);
-
-EpdFont ui10RegularFont(&ubuntu_10_regular);
-EpdFont ui10BoldFont(&ubuntu_10_bold);
-EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
-
-EpdFont ui12RegularFont(&ubuntu_12_regular);
-EpdFont ui12BoldFont(&ubuntu_12_bold);
-EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
+// No SD font installation is needed for the Korean UI or body. Existing UI
+// roles share one 10pt family; absent physical styles fall back to regular.
+EpdFont kimchiUiFont(&kimchi_ui_10_regular);
+EpdFontFamily kimchiUiFontFamily(&kimchiUiFont);
+EpdFont kimchiBatangFont(&kimchi_batang_14_regular);
+EpdFontFamily kimchiBatangFontFamily(&kimchiBatangFont);
 
 // Definitions for SilentRestart.h. RTC_NOINIT survives ESP.restart() but not power loss.
 RTC_NOINIT_ATTR uint32_t silentRebootMagic;
@@ -331,9 +327,8 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
 #endif  // OMIT_FONTS
-  renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
-  renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
-  renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
+  renderer.insertFont(UI_10_FONT_ID, kimchiUiFontFamily);
+  renderer.insertFont(KIMCHI_BATANG_14_FONT_ID, kimchiBatangFontFamily);
 
   // Discover and load SD card fonts
   sdFontSystem.begin(renderer);

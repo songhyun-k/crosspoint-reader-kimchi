@@ -14,3 +14,11 @@
 !OpenDyslexic/**
 !Ubuntu/
 !Ubuntu/**
+# Pinned kimchi sources and their copyright/provenance, not download caches.
+!KoPub-Batang/
+!KoPub-Batang/KoPub Batang Light.ttf
+!Pretendard/
+!Pretendard/Pretendard-Regular.ttf
+!Pretendard/OFL.txt
+!KOREAN-FONTS.md
+!korean-font-sources.json

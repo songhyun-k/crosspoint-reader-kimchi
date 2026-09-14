@@ -46,6 +46,17 @@ scriptGroups:
   - {tag: tifinagh, label: Tifinagh}
 
 families:
+  # Pinned user-supplied KoPub v2.1.1 input. Only Light exists; do not invent
+  # separate Bold/Italic files. See source/KOREAN-FONTS.md before publication.
+  # Every original upstream family below remains part of the generation input.
+  - name: KimchiBatang
+    description: "KoPub Batang Light source; Korean 11,172 syllables and 4,620 Hanja"
+    scripts: [latin, hangul, cjk]
+    intervals: "builtin,hangul,(0x3000-0x303F),(0x4E00-0x9FFF)"
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular: {path: "builtinFonts/source/KoPub-Batang/KoPub Batang Light.ttf"}
+
   # ── Serif ──────────────────────────────────────────────────────────────
 
   - name: Literata

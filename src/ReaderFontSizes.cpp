@@ -2,14 +2,22 @@
 
 #include <iterator>
 
-std::vector<uint8_t> readerFontPointSizes(const SdCardFontRegistry* registry, const char* sdFamilyName) {
+std::vector<uint8_t> readerFontPointSizes(const SdCardFontRegistry* registry, const char* sdFamilyName,
+                                          const uint8_t builtinFamily) {
   if (registry && sdFamilyName && sdFamilyName[0] != '\0') {
     if (const auto* family = registry->findFamily(sdFamilyName)) {
       auto sizes = family->availableSizes();
       if (!sizes.empty()) return sizes;
     }
   }
+  if (builtinFamily == KOPUB_READER_FAMILY) return {KOPUB_READER_POINT_SIZE};
   return {std::begin(BUILTIN_READER_POINT_SIZES), std::end(BUILTIN_READER_POINT_SIZES)};
+}
+
+uint8_t snapToBuiltinPointSize(const uint8_t pt, const uint8_t builtinFamily) {
+  return builtinFamily == KOPUB_READER_FAMILY
+             ? KOPUB_READER_POINT_SIZE
+             : snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), pt);
 }
 
 uint8_t snapToNearestPointSize(const uint8_t* sizes, const size_t count, const uint8_t pt) {
