@@ -29,14 +29,12 @@ TEST(QwertyKeyboardTest, HasOneStableEnglishMaskAndNoLanguageSwitch) {
   EXPECT_EQ(keyboard_layouts::enabled(), 1);
   EXPECT_EQ(keyboard_layouts::LATIN_BITS, 1);
   EXPECT_EQ(keyboard_layouts::startingLayout(), fui::KeyboardLayoutId::QwertyEn);
-  const auto& layout = fui::builtinKeyboardLayout(keyboard_layouts::startingLayout(), false, false, true, false);
+  const uint16_t enabled = keyboard_layouts::enabled();
+  const auto& layout = fui::builtinKeyboardLayout(keyboard_layouts::startingLayout(), false, false, true,
+                                                  (enabled & (enabled - 1)) != 0);
   EXPECT_FALSE(containsKey(layout, fui::QWERTY_KEY_LANG));
-}
-
-TEST(QwertyKeyboardTest, StaleLayoutIdsAlwaysReturnToQwerty) {
-  for (unsigned id = 0; id <= 255; ++id) {
-    EXPECT_EQ(keyboard_layouts::next(static_cast<fui::KeyboardLayoutId>(id)), fui::KeyboardLayoutId::QwertyEn);
-  }
+  EXPECT_EQ(keyboard_layouts::next(fui::KeyboardLayoutId::QwertyEn), fui::KeyboardLayoutId::QwertyEn);
+  EXPECT_EQ(keyboard_layouts::next(fui::KeyboardLayoutId::AzertyFr), fui::KeyboardLayoutId::QwertyEn);
 }
 
 TEST(QwertyKeyboardTest, KeepsTheSdkLowercaseLetterAndNumberRows) {

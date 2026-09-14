@@ -324,8 +324,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t frontlightRestoreOnWake = 1;
   // In-memory enum only; persisted as a stable code rather than this ordinal.
   uint8_t language = static_cast<uint8_t>(I18n::DEFAULT_LANGUAGE);
-  // Fixed QWERTY, using upstream's persisted English bit (bit 0). Older masks
-  // are normalised on load; input selection never consults this legacy field.
+  // Keep the legacy mask for saved-settings compatibility. Input selection is
+  // fixed to QWERTY and does not consult this field.
   uint16_t keyboardLayouts = 1;
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.
   uint8_t quickResumeSleepScreen = QUICK_RESUME_NEVER;

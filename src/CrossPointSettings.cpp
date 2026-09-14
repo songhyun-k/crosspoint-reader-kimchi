@@ -13,7 +13,6 @@
 #include "I18nKeys.h"
 #include "ReaderFontSizes.h"
 #include "SettingsList.h"
-#include "activities/util/KeyboardLayoutSet.h"
 #include "fontIds.h"
 
 namespace {
@@ -113,8 +112,11 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["hyphenationEnabled"] = 0;
 #endif
 
-  // Keep the legacy persisted mask truthful even after manual file edits.
-  doc["keyboardLayouts"] = keyboard_layouts::FIXED_MASK;
+  // A uint16_t mask, so it does not fit the uint8_t generic loop. Retained for
+  // compatibility with older builds; kimchi's input selection is fixed.
+  if (keyboardLayouts != 0) {
+    doc["keyboardLayouts"] = keyboardLayouts;
+  }
 }
 
 bool CrossPointSettings::fromJson(JsonVariantConst doc) {
@@ -234,10 +236,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     language = static_cast<uint8_t>(I18n::languageFromCode(doc["language"].as<const char*>()));
   }
 
-  if (!doc["keyboardLayouts"].isNull() && (doc["keyboardLayouts"] | uint16_t{0}) != keyboard_layouts::FIXED_MASK) {
-    needsResave = true;
+  // Preserve legacy masks without using them to select the input layout.
+  if (doc["keyboardLayouts"].is<uint16_t>()) {
+    keyboardLayouts = doc["keyboardLayouts"].as<uint16_t>();
   }
-  keyboardLayouts = keyboard_layouts::FIXED_MASK;
 
 #if !CP_HYPHENATION_LANGS
   hyphenationEnabled = 0;

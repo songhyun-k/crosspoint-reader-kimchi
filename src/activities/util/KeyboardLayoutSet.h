@@ -24,7 +24,6 @@ inline constexpr uint16_t bitAt(const uint8_t i) { return static_cast<uint16_t>(
 // Symbol layers have no Latin letters, so credentials and URLs require at
 // least one of these layouts to remain enabled.
 inline constexpr uint16_t LATIN_BITS = bitAt(0);
-inline constexpr uint16_t FIXED_MASK = bitAt(0);
 
 uint16_t enabled();
 freeink::ui::KeyboardLayoutId startingLayout();

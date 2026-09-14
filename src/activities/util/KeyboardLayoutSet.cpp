@@ -2,7 +2,7 @@
 
 namespace keyboard_layouts {
 
-uint16_t enabled() { return FIXED_MASK; }
+uint16_t enabled() { return bitAt(0); }
 
 freeink::ui::KeyboardLayoutId startingLayout() { return freeink::ui::KeyboardLayoutId::QwertyEn; }
 
