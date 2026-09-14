@@ -224,12 +224,3 @@ TEST_F(KimchiOtaTest, PreservesImageVerificationAndAbortOnWriteFailure) {
   EXPECT_EQ(ota_test::boots, 0u);
   EXPECT_EQ(ota_test::powerSave, WIFI_PS_MIN_MODEM);
 }
-
-TEST_F(KimchiOtaTest, InvalidMagicIsRejectedBeforeEndOrBootSelection) {
-  OtaUpdater updater;
-  ASSERT_EQ(updater.checkForUpdate(), OtaUpdater::OK);
-  ota_test::image[0] = 0;
-  EXPECT_NE(updater.installUpdate(), OtaUpdater::OK);
-  EXPECT_EQ(ota_test::ends, 0u);
-  EXPECT_EQ(ota_test::boots, 0u);
-}

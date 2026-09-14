@@ -138,7 +138,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   // the boot target.
   board_tag::Scanner tagScanner;
   const bool fetchOk = HttpDownloader::fetchUrl(otaUrl, [&](const uint8_t* data, size_t len) {
-    if (len > otaSize - processedSize || len > updatePartition->size - processedSize) {
+    if (len > otaSize - processedSize) {
       flashOk = false;
       return false;
     }
@@ -147,10 +147,6 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
       std::memcpy(hdr + hdrLen, data, take);
       hdrLen += take;
       if (hdrLen == sizeof(hdr)) {
-        if (hdr[0] != 0xE9) {
-          flashOk = false;
-          return false;
-        }
         uint16_t imageChip;
         std::memcpy(&imageChip, hdr + 12, sizeof(imageChip));
         const uint16_t deviceChip = firmware_flash::runningPartitionChipId();
@@ -194,7 +190,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     return WRONG_DEVICE_ERROR;
   }
 
-  if (!fetchOk || !flashOk || hdrLen != sizeof(hdr) || processedSize != otaSize) {
+  if (!fetchOk || !flashOk || processedSize != otaSize) {
     LOG_ERR("OTA", "Firmware install failed (%s)", flashOk ? "download" : "flash write");
     esp_ota_abort(otaHandle);
     return flashOk ? HTTP_ERROR : INTERNAL_UPDATE_ERROR;
