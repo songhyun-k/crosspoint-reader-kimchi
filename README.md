@@ -1,4 +1,31 @@
-# CrossPoint Reader
+# CrossPoint Reader Kimchi
+
+CrossPoint Reader **1.6.0**을 기반으로, 한국어 독서에 사용할 기능을 선택해 이식한 포크입니다.
+
+- 한국어·영어 UI, 기본 한국어와 QWERTY 입력.
+- 내장 Pretendard 기반 10pt UI(한글 2,350자)와 KoPub Batang 기반 14pt 본문(한글 11,172자·한자 4,620자). SD 폰트 설치 없이 한글을 읽을 수 있습니다.
+- 합성 굵은꼴, 한국어 글자 단위 양끝정렬(기본 켬), 독립적인 문단 첫 줄 들여쓰기(기본 끔).
+- XTC 1비트 스트리밍과 메모리 부족 시 폰트 캐시 해제·1회 재시도, X4 ADC 배터리 상단 보정.
+- 원본 `.cpfont` 다운로드·관리와 내장 Noto 폰트를 유지합니다. KO의 `.epdfont`는 지원하지 않습니다.
+
+## Kimchi 설치·업데이트
+
+[펌웨어 릴리스](https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/latest)에서 기기에 맞는 앱 이미지를 받아 SD 카드 업데이트로 설치하세요. 기존 파티션 테이블을 유지하며, 다른 보드의 이미지를 설치하면 안 됩니다. 업데이트 전 SD 카드의 책과 설정을 백업하세요.
+
+| 기기 | 앱 이미지 |
+|---|---|
+| Xteink X4 / X3 (ESP32-C3) | `firmware.bin` |
+| reTerminal Sticky | `firmware-sticky.bin` |
+| Xteink X4Pro | `firmware-x4pro.bin` |
+| M5PaperMono | `firmware-papermono.bin` |
+
+Kimchi 설치 후 OTA는 이 저장소의 최신 펌웨어를 조회합니다. 추가 SD 폰트는 기기의 폰트 관리 메뉴에서 내려받을 수 있으며, Kimchi Batang 12·14·16·18pt를 제공합니다. 폰트 릴리스는 펌웨어의 `latest`와 별도로 관리합니다.
+
+장기 브랜치 `master`에는 upstream 변경을 merge하며, 공개된 이력을 rebase하지 않습니다. 버전은 `<upstream>-kimchi.<번호>` 형식입니다. 이식 출처는 [crosspoint-reader-ko](https://github.com/crosspoint-reader-ko/crosspoint-reader-ko)이며, 아래 원본 설명과 달리 Kimchi의 UI 언어는 한국어·영어이고 언어별 하이픈 패턴은 포함하지 않습니다.
+
+현재 배포는 자동 테스트·빌드 검증 기준이며, 실기기 화면·설치 검증을 완료했다는 의미는 아닙니다.
+
+## Upstream CrossPoint Reader
 
 [![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
 
