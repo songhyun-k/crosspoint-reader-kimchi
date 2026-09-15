@@ -19,7 +19,7 @@ CrossPoint Reader **1.6.0**을 기반으로, 한국어 독서에 사용할 기�
 | Xteink X4Pro | `firmware-x4pro.bin` |
 | M5PaperMono | `firmware-papermono.bin` |
 
-Kimchi 설치 후 OTA는 이 저장소의 최신 펌웨어를 조회합니다. 추가 SD 폰트는 기기의 폰트 관리 메뉴에서 내려받을 수 있으며, Kimchi Batang 12·14·16·18pt를 제공합니다. 폰트 릴리스는 펌웨어의 `latest`와 별도로 관리합니다.
+Kimchi 설치 후 OTA는 이 저장소의 최신 펌웨어를 조회합니다. 추가 SD 폰트는 기기의 폰트 관리 메뉴에서 내려받을 수 있으며, KoPubBatang 12·14·16·18pt를 제공합니다. 폰트 릴리스는 펌웨어의 `latest`와 별도로 관리합니다.
 
 장기 브랜치 `master`에는 upstream 변경을 merge하며, 공개된 이력을 rebase하지 않습니다. 버전은 `<upstream>-kimchi.<번호>` 형식입니다. 이식 출처는 [crosspoint-reader-ko](https://github.com/crosspoint-reader-ko/crosspoint-reader-ko)이며, 아래 원본 설명과 달리 Kimchi의 UI 언어는 한국어·영어이고 언어별 하이픈 패턴은 포함하지 않습니다.
 

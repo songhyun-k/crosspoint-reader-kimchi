@@ -84,8 +84,8 @@ TEST(KoreanFontsTest, PointSizeAndLegacyFamilyPoliciesStayConsistent) {
   EXPECT_EQ(readerFontPointSizes(nullptr, "", 0), std::vector<uint8_t>({12, 14, 16, 18}));
   EXPECT_EQ(snapToBuiltinPointSize(18, KOPUB_READER_FAMILY), 14);
   SdCardFontRegistry registry;
-  registry.families.push_back({"KimchiBatang", {12, 14, 16, 18}});
-  EXPECT_EQ(readerFontPointSizes(&registry, "KimchiBatang", KOPUB_READER_FAMILY),
+  registry.families.push_back({"KoPubBatang", {12, 14, 16, 18}});
+  EXPECT_EQ(readerFontPointSizes(&registry, "KoPubBatang", KOPUB_READER_FAMILY),
             std::vector<uint8_t>({12, 14, 16, 18}));
   EXPECT_EQ(readerFontPointSizes(&registry, "missing", KOPUB_READER_FAMILY), std::vector<uint8_t>({14}));
 }
@@ -95,8 +95,8 @@ TEST(KoreanFontsTest, LocallyGeneratedCpfontsLoadWithTheUnchangedV4Reader) {
   if (!directory) GTEST_SKIP() << "Run build-sd-fonts.py, then set KIMCHI_SD_FONT_FIXTURES to its output directory";
   storage_test::reset();
   for (const int size : {12, 14, 16, 18}) {
-    const std::string name = "KimchiBatang_" + std::to_string(size) + ".cpfont";
-    std::ifstream input(std::string(directory) + "/KimchiBatang/" + name, std::ios::binary);
+    const std::string name = "KoPubBatang_" + std::to_string(size) + ".cpfont";
+    std::ifstream input(std::string(directory) + "/KoPubBatang/" + name, std::ios::binary);
     ASSERT_TRUE(input.good());
     storage_test::files[name] = std::vector<uint8_t>(std::istreambuf_iterator<char>(input), {});
     SdCardFont sd;

@@ -54,12 +54,12 @@ class KoreanFontCatalogTest(unittest.TestCase):
         families = {f["name"]: f for f in catalog["families"]}
         self.assertIn("Literata", families)
         self.assertIn("NotoSansExtended", families)
-        kopub = families["KimchiBatang"]
+        kopub = families["KoPubBatang"]
         self.assertEqual(kopub["sizes"], [12, 14, 16, 18])
         self.assertEqual(set(kopub["styles"]), {"regular"})
         descriptions, scripts, groups = GEN.load_catalog_from_yaml(SCRIPTS / "sd-fonts.yaml")
-        self.assertIn("hangul", scripts["KimchiBatang"])
-        self.assertTrue(descriptions["KimchiBatang"])
+        self.assertIn("hangul", scripts["KoPubBatang"])
+        self.assertTrue(descriptions["KoPubBatang"])
         self.assertIn("hangul", dict(groups))
 
     def test_local_fixture_uses_original_manifest_schema_and_flat_release_assets(self):
@@ -67,8 +67,8 @@ class KoreanFontCatalogTest(unittest.TestCase):
         self.assertEqual(manifest["version"], FONTS_MANIFEST_VERSION)
         self.assertEqual(manifest["baseUrl"], font_release_base_url())
         families = {f["name"]: f for f in manifest["families"]}
-        self.assertEqual(set(families), {"KimchiBatang", "NotoSansExtended"})
-        self.assertEqual(families["KimchiBatang"]["styles"], ["regular"])
+        self.assertEqual(set(families), {"KoPubBatang", "NotoSansExtended"})
+        self.assertEqual(families["KoPubBatang"]["styles"], ["regular"])
         self.assertEqual(families["NotoSansExtended"]["styles"], ["regular", "bold", "italic", "bolditalic"])
         for family in families.values():
             self.assertEqual(len(family["files"]), 4)
