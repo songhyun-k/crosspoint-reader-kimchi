@@ -2059,8 +2059,9 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   const bool syntheticBold = font.needsSyntheticBold(style);
   const bool halfSize = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
   const auto sdIt = sdCardFonts_.find(resolvedFontId);
-  // Metadata-only layout keeps upstream's no-kerning/no-ligature fast path.
-  if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
+  const auto* sdData = sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable() ? font.getData(style) : nullptr;
+  // Advance tables may coexist with rendering metadata; only bypass empty tables.
+  if (sdData && !sdData->kernMatrix && !sdData->kernRowOffsets && !sdData->ligaturePairs) {
     const uint8_t styleIdx = resolveSdCardStyle(*sdIt->second, style);
     while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
       if (BidiUtils::isTransparentMark(cp) || utf8IsCombiningMark(cp)) continue;

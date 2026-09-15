@@ -1,3 +1,4 @@
+#include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <SdCardFont.h>
 #include <gtest/gtest.h>
@@ -93,6 +94,32 @@ TEST_F(SdCardFontLifetimeTest, ReleaseClearsBothPublishedViewsAndPreservesCovera
   // Do not dereference a dangling table in the pre-fix red test.
   if (stub->ligaturePairs == nullptr) EXPECT_EQ(epd->getLigature('f', 'i'), 0u);
   ASSERT_NE(epd->getGlyph('f'), nullptr);  // on-demand miss callback still works
+}
+
+TEST_F(SdCardFontLifetimeTest, AdvanceTableStillMeasuresLoadedLigaturesAndKerning) {
+  storage_test::files["font.cpfont"] = makeFont().bytes;
+  SdCardFont font;
+  ASSERT_TRUE(font.load("font.cpfont"));
+  ASSERT_EQ(font.prewarm("fiﬁ", 1), 0);
+  ASSERT_EQ(font.buildAdvanceTable("fiﬁ", 1), 0);
+  HalDisplay panel;
+  GfxRenderer renderer(panel);
+  renderer.insertFont(100, EpdFontFamily(font.getEpdFont()));
+  renderer.registerSdCardFont(100, &font);
+  const size_t reads = storage_test::reads;
+  EXPECT_EQ(renderer.getTextAdvanceX(100, "fi", EpdFontFamily::REGULAR), 1);
+
+  // Exercise the same loaded data without ligatures, with a one-pixel kern.
+  EpdFontData data = *font.getEpdFont()->data;
+  const int8_t kern = -16;
+  data.ligaturePairs = nullptr;
+  data.ligaturePairCount = 0;
+  data.kernMatrix = &kern;
+  EpdFont kernFont(&data);
+  renderer.insertFont(100, EpdFontFamily(&kernFont));
+  EXPECT_EQ(renderer.getTextAdvanceX(100, "fi", EpdFontFamily::REGULAR), 1);
+  EXPECT_EQ(storage_test::reads, reads);
+  renderer.removeFont(100);
 }
 
 TEST_F(SdCardFontLifetimeTest, EveryStyleCanBeReleasedAndRewarmedRepeatedly) {
