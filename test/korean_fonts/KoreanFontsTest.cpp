@@ -24,6 +24,13 @@ size_t coverage(const EpdFont& font, const uint32_t first, const uint32_t last) 
 }
 }  // namespace
 
+TEST(KoreanFontsTest, UiIsRawAndBodyRemainsCompressed) {
+  EXPECT_EQ(kimchi_ui_10_regular.groups, nullptr);
+  EXPECT_EQ(kimchi_ui_10_regular.groupCount, 0u);
+  EXPECT_NE(kimchi_batang_14_regular.groups, nullptr);
+  EXPECT_GT(kimchi_batang_14_regular.groupCount, 0u);
+}
+
 TEST(KoreanFontsTest, RetainsAllAgreedSyllablesAndHanja) {
   const EpdFont ui(&kimchi_ui_10_regular), body(&kimchi_batang_14_regular);
   EXPECT_EQ(coverage(ui, 0xAC00, 0xD7A3), 2350u);

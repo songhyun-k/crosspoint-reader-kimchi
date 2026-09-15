@@ -8,10 +8,11 @@ Upstream Noto reader families and their sizes remain available. Rare syllables
 outside the UI subset are not guaranteed in filenames or titles without an
 appropriate SD fallback. Physical display/layout quality needs device testing.
 
-Both bitmaps use the upstream two-bit DEFLATE format and renderer; the Korean
-generator caps each uncompressed group at 8,192 bytes instead of the converter's
-64 KiB default. This bounds that decompression scratch allocation, not total
-heap use. Glyph coverage and raster quality are not reduced by the cap.
+Both bitmaps use the upstream two-bit format and renderer. The UI bitmap is
+uncompressed; the body bitmap uses DEFLATE with each uncompressed group capped
+at 8,192 bytes instead of the converter's 64 KiB default. This bounds the body's
+decompression scratch allocation, not total heap use. Glyph coverage and raster
+quality are not reduced by the cap.
 
 From the repository root, with Python packages in a project-local environment:
 

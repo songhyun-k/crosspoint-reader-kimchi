@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate kimchi fonts with upstream fontconvert.py and its DEFLATE format.
+"""Generate kimchi fonts with upstream fontconvert.py.
 
 Uses the tracked, hash-pinned source fonts. No network, checkout, publication
 or device access is performed.
@@ -40,13 +40,15 @@ def intervals(points: list[int]) -> list[tuple[int, int]]:
     return result
 
 
-def convert(name: str, size: int, relative: str, ranges: list[tuple[int, int]]) -> None:
+def convert(name: str, size: int, relative: str, ranges: list[tuple[int, int]], compress: bool = True) -> None:
     target = BUILTINS / f"{name}.h"
     args = [sys.executable, "fontconvert.py", name, str(size), "../builtinFonts/source/" + relative,
-            "--2bit", "--compress", "--zopfli", "--max-group-bytes", "8192"]
+            "--2bit"]
+    if compress:
+        args.extend(["--compress", "--zopfli", "--max-group-bytes", "8192"])
     for start, end in ranges:
         args.extend(["--additional-intervals", f"0x{start:X},0x{end:X}"])
-    print(f"Generating {target.name} with existing group DEFLATE", flush=True)
+    print(f"Generating {target.name} ({'group DEFLATE' if compress else 'uncompressed'})", flush=True)
     completed = subprocess.run(args, cwd=HERE, check=True, stdout=subprocess.PIPE, text=True, encoding="utf-8")
     text = re.sub(r"^ \* Command used: .*$",
                   " * Command used: python lib/EpdFont/scripts/convert-korean-fonts.py\n"
@@ -63,7 +65,7 @@ def main() -> None:
             raise ValueError(f"Source hash mismatch: {relative}")
     convert("kimchi_batang_14_regular", 14, "KoPub-Batang/KoPub Batang Light.ttf", KOPUB_RANGES)
     convert("kimchi_ui_10_regular", 10, "Pretendard/Pretendard-Regular.ttf",
-            [(0x1100, 0x11FF), (0x3130, 0x318F)] + intervals(ks_x_1001_syllables()))
+            [(0x1100, 0x11FF), (0x3130, 0x318F)] + intervals(ks_x_1001_syllables()), compress=False)
     subprocess.run([sys.executable, "verify_compression.py", "../builtinFonts/"], cwd=HERE, check=True)
 
 
