@@ -845,14 +845,8 @@ def main(
     default_output_dir = "lib/I18n/"
     default_src_dirs = ["src", "lib"]
 
-    if translations_dir is None or output_dir is None:
-        if len(sys.argv) == 3:
-            translations_dir = sys.argv[1]
-            output_dir = sys.argv[2]
-        else:
-            # Default for no arguments or weird arguments (e.g. SCons)
-            translations_dir = default_translations_dir
-            output_dir = default_output_dir
+    translations_dir = translations_dir or default_translations_dir
+    output_dir = output_dir or default_output_dir
 
     if src_dirs is None:
         src_dirs = default_src_dirs

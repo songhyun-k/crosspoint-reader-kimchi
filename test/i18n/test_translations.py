@@ -2,8 +2,12 @@
 
 import importlib.util
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
+from shutil import copytree
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("gen_i18n", ROOT / "scripts/gen_i18n.py")
@@ -14,6 +18,16 @@ PRINTF = re.compile(r"%(?:\d+\$)?[-+#0 ]*(?:\d+|\*)?(?:\.(?:\d+|\*))?(?:hh|h|ll|
 
 
 class KoreanTranslationsTest(unittest.TestCase):
+    def test_existing_cli_options_use_default_paths(self):
+        with tempfile.TemporaryDirectory() as folder:
+            copytree(TRANSLATIONS, Path(folder) / "lib/I18n/translations")
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "scripts/gen_i18n.py"), "--strip-unused", "--verbose"],
+                cwd=folder, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue((Path(folder) / "lib/I18n/I18nKeys.h").is_file())
+
     @classmethod
     def setUpClass(cls):
         cls.en = GEN.parse_yaml_file(str(TRANSLATIONS / "english.yaml"))
