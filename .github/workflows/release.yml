@@ -8,7 +8,7 @@ name: Compile Release
 on:
   push:
     tags:
-      - '*'
+      - '*.*.*-kimchi.*'
 
 permissions:
   contents: read

@@ -2,16 +2,19 @@ name: Build & Publish SD Card Fonts
 
 # Fonts change rarely — run manually when font sources or the conversion
 # pipeline are updated.  Publishes .cpfont files + fonts.json manifest as
-# GitHub Release assets on the crosspoint-fonts repo so font releases don't
-# clutter the firmware releases page.
-#
-# Requires a repository secret FONTS_REPO_TOKEN — a fine-grained PAT (or
-# classic PAT) with contents:write permission on the target fonts repo.
+# GitHub Release assets on this fork. Font releases never replace firmware latest.
 on:
   workflow_dispatch:
 
 env:
-  FONTS_REPO: crosspoint-reader/crosspoint-fonts
+  FONTS_REPO: ${{ github.repository }}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-sd-fonts
+  cancel-in-progress: false
 
 jobs:
   build-fonts:
@@ -50,7 +53,7 @@ jobs:
       - name: Compute release tags
         id: tags
         env:
-          GH_TOKEN: ${{ secrets.FONTS_REPO_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           BASE="sd-fonts-m${{ steps.versions.outputs.metadata }}-b${{ steps.versions.outputs.binary }}"
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
@@ -73,34 +76,34 @@ jobs:
 
       - name: Publish versioned release to fonts repo
         env:
-          GH_TOKEN: ${{ secrets.FONTS_REPO_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSIONED="${{ steps.tags.outputs.versioned }}"
           TITLE="SD Card Fonts (${VERSIONED#sd-fonts-})"
 
           gh release create "$VERSIONED" dist/* \
             --repo "${{ env.FONTS_REPO }}" \
+            --target "$GITHUB_SHA" --latest=false \
             --title "$TITLE" \
             --notes "Pre-built \`.cpfont\` font files for CrossPoint Reader.
 
           Download individual files or use **Settings > System > Manage Fonts** on the device.
 
-          See [SD Card Fonts documentation](https://github.com/${{ github.repository }}/blob/main/docs/sd-card-fonts.md) for details."
+          See [SD Card Fonts documentation](https://github.com/${{ github.repository }}/blob/master/docs/sd-card-fonts.md) for details."
 
       - name: Update stable tag for device downloads
         env:
-          GH_TOKEN: ${{ secrets.FONTS_REPO_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           BASE="${{ steps.tags.outputs.base }}"
 
-          # Delete the old stable release for this m/b pair (the versioned releases are kept)
-          gh release delete "$BASE" --repo "${{ env.FONTS_REPO }}" --yes 2>/dev/null || true
-
-          gh release create "$BASE" dist/* \
-            --repo "${{ env.FONTS_REPO }}" \
-            --title "SD Card Fonts (${BASE#sd-fonts-})" \
-            --notes "Current font build for manifest v${{ steps.versions.outputs.metadata }}, binary format v${{ steps.versions.outputs.binary }}. Devices with this firmware version download from this release.
-
-          This is revision **${{ steps.tags.outputs.revision }}** — see [\`${{ steps.tags.outputs.versioned }}\`](https://github.com/${{ env.FONTS_REPO }}/releases/tag/${{ steps.tags.outputs.versioned }}) for the immutable copy.
-
-          Download individual files or use **Settings > System > Manage fonts** on the device."
+          NOTES="Current font catalog. Immutable copy: https://github.com/${{ env.FONTS_REPO }}/releases/tag/${{ steps.tags.outputs.versioned }}"
+          if gh release view "$BASE" --repo "${{ env.FONTS_REPO }}" >/dev/null 2>&1; then
+            gh release upload "$BASE" dist/*.cpfont --clobber --repo "${{ env.FONTS_REPO }}"
+            gh release upload "$BASE" dist/fonts.json --clobber --repo "${{ env.FONTS_REPO }}"
+            gh release edit "$BASE" --latest=false --notes "$NOTES" --repo "${{ env.FONTS_REPO }}"
+          else
+            gh release create "$BASE" dist/* --repo "${{ env.FONTS_REPO }}" \
+              --target "$GITHUB_SHA" --latest=false \
+              --title "SD Card Fonts (${BASE#sd-fonts-})" --notes "$NOTES"
+          fi
