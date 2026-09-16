@@ -25,6 +25,8 @@ Kimchi 설치 후 OTA는 이 저장소의 최신 펌웨어를 조회합니다. �
 
 현재 배포는 자동 테스트·빌드 검증 기준이며, 실기기 화면·설치 검증을 완료했다는 의미는 아닙니다.
 
+자체 기능·최적화는 Kimchi `master`에서 작업 브랜치를 만들고 검증 후 다시 통합합니다. upstream 업데이트는 별도 동기화 브랜치에서 merge합니다. 원격 역할·검증·승인·후속 작업의 기준은 [Kimchi 저장소·브랜치 운영](docs/kimchi-workflow.md)을 따릅니다. 아래 원본 문서의 `develop` 기여 규칙은 Kimchi 자체 개발 기준이 아닙니다.
+
 ## Upstream CrossPoint Reader
 
 [![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)

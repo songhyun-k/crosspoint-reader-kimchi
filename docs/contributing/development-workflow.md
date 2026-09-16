@@ -1,6 +1,6 @@
 # Development Workflow
 
-This page defines the expected local workflow before opening a pull request.
+This page describes contributions to the upstream CrossPoint repository. For Kimchi's own features, optimizations, and upstream synchronization, follow [Kimchi repository workflow](../kimchi-workflow.md): branch from and integrate into Kimchi `master`. The `develop` references below are not the Kimchi base. Confirm upstream's current contribution rules when actually submitting there.
 
 ## 1) Fork and create a focused branch
 

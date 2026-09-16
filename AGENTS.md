@@ -3,6 +3,10 @@
 Project: Open-source e-reader firmware for Xteink X4 (ESP32-C3)
 Mission: Provide a lightweight, high-performance reading experience focused on EPUB rendering on constrained hardware.
 
+## Kimchi Fork Workflow
+
+This repository is the Kimchi fork. Read [Kimchi repository workflow](docs/kimchi-workflow.md) before branch, commit, merge, or upstream-sync work. Kimchi topics start from and integrate into local `master`, tracking `origin/master`; upstream's `develop` convention applies only to contributions sent to upstream. Keep public history intact. Device validation and authorized development integration are separate, as described below.
+
 ## AI Agent Identity and Cognitive Rules
 
 * Role: Senior Embedded Systems Engineer (ESP-IDF/Arduino-ESP32 specialized).
@@ -701,11 +705,13 @@ upstream    https://github.com/crosspoint-reader/crosspoint-reader.git (fetch/pu
 
 ### Git Operation Rules
 
-1. Integration branches and PR comparisons target `develop`, not `master` or the remote's symbolic HEAD.
-2. Never push to any remote or open/close a PR without explicit user approval. Complete local work and any requested local commit, then stop.
-3. If the user explicitly approves a push, inspect remotes again and use `fork` for the feature branch unless the user specifies otherwise.
+1. Kimchi topic branches start from and integrate into local `master`, tracking `origin/master`. Do not introduce a Kimchi `develop` branch or use `upstream/master` as the local tracking target. For upstream contributions only, confirm upstream's current target separately.
+2. Commit, merge, push, PR changes, tags/releases, and device uploads require approval for their respective scope. Complete the approved local work, then stop; one step does not authorize the next.
+3. Before an approved push, recheck remotes and use the Kimchi remote (`origin` in this clone), not `upstream` or `ko`. Do not invent a `fork` remote.
 4. Never add Claude, Codex, or assistant self-attribution as a commit co-author or generated-by trailer.
 5. When a change supersedes or adapts another person's PR, verify the original human author from Git/GitHub and add that person as `Co-Authored-By`; skip bot authors.
+
+Use a short-lived `sync/upstream-<version-or-sha>` branch for an explicitly requested upstream update. Merge the selected upstream commit and preserve that ancestry when integrating into Kimchi `master`; never squash the upstream sync or rebase published Kimchi history. Prefer fast-forward integration when possible. Preserve completed worktrees until their removal is separately authorized.
 
 ### Branch Naming Convention
 
@@ -716,7 +722,11 @@ feature/<short-description>       # New features
 fix/<issue-number>-<description>  # Bug fixes
 refactor/<component-name>         # Code refactoring
 docs/<topic>                      # Documentation updates
+perf/<issue>-<description>         # Performance work
+sync/upstream-<version-or-sha>     # Upstream integration
 ```
+
+A worktree tool may add a user namespace prefix; do not rewrite completed branch history just to rename it.
 
 **Examples**:
 
@@ -749,23 +759,12 @@ Tested in all 4 orientations with 5MB+ files.
 
 ### When to Commit
 
-**DO commit when**:
-
-- User explicitly requests: "commit these changes"
-- Feature is complete and tested on device
-- Bug fix is verified working
-- Refactoring preserves all functionality
-- All tests pass (`pio run` succeeds)
-
-**DO NOT commit when**:
-
-- Changes are untested on actual hardware
-- Build fails or has warnings
-- Experimenting or debugging in progress
-- User hasn't explicitly requested commit
-- Files excluded by `.gitignore` would be included — always run `git status` and cross-check against `.gitignore` before staging (e.g., `*.generated.h`, `.pio/`, `compile_commands.json`, `platformio.local.ini`)
-
-**Rule**: **If uncertain, ASK before committing.**
+- Commit only within the user's explicit approval and include only the intended, verified changes.
+- For code changes, relevant existing checks and the applicable production build must pass. Report new warnings and failures; do not turn an environment failure into a pass or expand scope to unrelated warning cleanup.
+- Kimchi development commits and separately approved local integration may precede device validation when the user owns that validation. Record **device validation pending**; never imply physical latency, image quality, power, or stability was verified.
+- Documentation-only changes do not require another firmware build. Do not repeat a successful build after formatting or conflict-free integration of identical code.
+- Do not stage `.gitignore`-excluded generated files, `.pio/`, local environment overrides, firmware, or one-off measurement outputs.
+- If the approved scope or a required check is unresolved, report it instead of committing or merging beyond that scope.
 
 ---
 
