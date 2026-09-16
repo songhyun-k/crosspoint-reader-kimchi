@@ -3,6 +3,8 @@
 #include <Epub/ReaderRenderSpec.h>
 #include <Epub/Section.h>
 #include <Epub/parsers/ChapterHtmlSlimParser.h>
+#include <FontCacheManager.h>
+#include <FontDecompressor.h>
 #include <GfxRenderer.h>
 #include <Utf8.h>
 #include <builtinFonts/kimchi_batang_14_regular.h>
@@ -445,4 +447,66 @@ TEST_F(KoreanLayoutTest, RealSectionInvalidatesIndentAndPreservesContentPosition
   ASSERT_NE(first, nullptr);
   EXPECT_EQ(static_cast<PageLine&>(*first->elements[0]).getBlock()->wordXpos(0),
             renderer.getTextAdvanceX(1, "\xE3\x80\x80", R));
+}
+
+TEST_F(KoreanLayoutTest, IdleChunksPrewarmBuiltPagesAndFinishWithoutMovingTheReader) {
+  std::string html = "<html><body><!--" + std::string(32768, 'x') + "-->";
+  for (int i = 0; i < 2000; ++i) html += "<p>가나다라마바사 함께 읽는 한글 문단입니다.</p>";
+  html += "</body></html>";
+  storage_test::files["cache/html/0.html"] = std::vector<uint8_t>(html.begin(), html.end());
+  FontDecompressor decompressor;
+  FontCacheManager manager(renderer.getFontMap(), renderer.getSdCardFonts());
+  manager.setFontDecompressor(&decompressor);
+  renderer.setFontCacheManager(&manager);
+  struct ClearManager {
+    GfxRenderer& renderer;
+    ~ClearManager() { renderer.setFontCacheManager(nullptr); }
+  } guard{renderer};
+  const auto epub = std::make_shared<Epub>();
+  ReaderRenderSpec spec;
+  spec.fontId = 1;
+  spec.viewportWidth = 227;
+  spec.viewportHeight = 160;
+  Section section(epub, 0, renderer);
+  ASSERT_TRUE(section.startBuild(spec));
+  const size_t reads = storage_test::reads;
+  ASSERT_TRUE(section.buildSomeMore(2, 1));
+  EXPECT_EQ(storage_test::reads, reads + 1);  // yields even through a long comment
+  EXPECT_EQ(section.pageCount, 0);
+  ASSERT_TRUE(section.isBuilding());
+  for (int tick = 0; tick < 100 && section.pageCount < 2; ++tick) {
+    ASSERT_TRUE(section.buildSomeMore(2, 1));
+  }
+  ASSERT_GE(section.pageCount, 2);
+  ASSERT_TRUE(section.isBuilding());
+  const auto next = section.loadPage(1);
+  ASSERT_NE(next, nullptr);
+  {
+    auto scope = manager.createPrewarmScope();
+    next->render(renderer, 1, 0, 0);
+    scope.endScanAndPrewarm();
+  }
+  {
+    HalFile file;
+    ASSERT_TRUE(Storage.openFileForWrite("TEST", "before.page", file));
+    ASSERT_TRUE(next->serialize(file));
+  }
+  for (int tick = 0; tick < 1000 && section.isBuilding(); ++tick) {
+    ASSERT_TRUE(section.buildSomeMore(2, 1));
+  }
+  EXPECT_TRUE(section.isBuildComplete());
+  EXPECT_FALSE(section.isBuilding());
+  EXPECT_EQ(section.currentPage, 0);  // finishes beyond the five-page window while stationary
+  ASSERT_GT(section.pageCount, 5);
+  Section reopened(epub, 0, renderer);
+  ASSERT_TRUE(reopened.loadSectionFile(spec));
+  EXPECT_FALSE(reopened.isPartial());
+  const auto committed = reopened.loadPage(1);
+  ASSERT_NE(committed, nullptr);
+  {
+    HalFile file;
+    ASSERT_TRUE(Storage.openFileForWrite("TEST", "after.page", file));
+    ASSERT_TRUE(committed->serialize(file));
+  }
+  EXPECT_EQ(storage_test::files.at("before.page"), storage_test::files.at("after.page"));
 }

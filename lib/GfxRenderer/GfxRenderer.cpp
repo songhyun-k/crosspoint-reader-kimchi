@@ -2067,9 +2067,9 @@ int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style styl
   const bool syntheticBold = fontIt->second.needsSyntheticBold(style);
   // Advance table fast-path for SD card fonts during layout
   auto sdIt = sdCardFonts_.find(fontId);
-  if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
+  if (sdIt != sdCardFonts_.end()) {
     const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    return fp4::toPixel(EpdFont::advanceForRender(sdIt->second->getAdvance(' ', resolvedStyle), syntheticBold));
+    return fp4::toPixel(EpdFont::advanceForRender(sdIt->second->getAdvanceOrLoad(' ', resolvedStyle), syntheticBold));
   }
 
   const EpdGlyph* spaceGlyph = fontIt->second.getGlyph(' ', style);
@@ -2088,11 +2088,13 @@ int GfxRenderer::getSpaceAdvance(const int fontId, const uint32_t leftCp, const 
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     const uint8_t resolvedStyle = resolveSdCardStyle(*sdIt->second, style);
-    return fp4::toPixel(EpdFont::advanceForRender(sdIt->second->getAdvance(' ', resolvedStyle), syntheticBold));
+    return fp4::toPixel(EpdFont::advanceForRender(sdIt->second->getAdvanceOrLoad(' ', resolvedStyle), syntheticBold));
   }
 
-  const EpdGlyph* spaceGlyph = font.getGlyph(' ', style);
-  const int32_t spaceAdvanceFP = spaceGlyph ? static_cast<int32_t>(spaceGlyph->advanceX) : 0;
+  const EpdGlyph* spaceGlyph = sdIt == sdCardFonts_.end() ? font.getGlyph(' ', style) : nullptr;
+  const int32_t spaceAdvanceFP = sdIt != sdCardFonts_.end()
+                                     ? sdIt->second->getAdvanceOrLoad(' ', resolveSdCardStyle(*sdIt->second, style))
+                                     : (spaceGlyph ? static_cast<int32_t>(spaceGlyph->advanceX) : 0);
   // Combine space advance + flanking kern into one fixed-point sum before snapping.
   // Snapping the combined value avoids the +/-1 px error from snapping each component separately.
   const int32_t kernFP = static_cast<int32_t>(font.getKerning(leftCp, ' ', style)) +
@@ -2135,17 +2137,13 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
   const bool syntheticBold = font.needsSyntheticBold(style);
   const bool halfSize = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
   const auto sdIt = sdCardFonts_.find(resolvedFontId);
-  const auto* sdData = sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable() ? font.getData(style) : nullptr;
+  const auto* sdData = sdIt != sdCardFonts_.end() ? font.getData(style) : nullptr;
   // Advance tables may coexist with rendering metadata; only bypass empty tables.
   if (sdData && !sdData->kernMatrix && !sdData->kernRowOffsets && !sdData->ligaturePairs) {
     const uint8_t styleIdx = resolveSdCardStyle(*sdIt->second, style);
     while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
       if (BidiUtils::isTransparentMark(cp) || utf8IsCombiningMark(cp)) continue;
-      int32_t advance = sdIt->second->getAdvance(cp, styleIdx);
-      if (advance == 0) {
-        const EpdGlyph* glyph = font.getGlyph(cp, style);
-        advance = glyph ? glyph->advanceX : 0;
-      }
+      const int32_t advance = sdIt->second->getAdvanceOrLoad(cp, styleIdx);
       // Match drawText's per-glyph pixel rounding, including synthetic bold.
       widthPx += fp4::toPixel(EpdFont::advanceForRender(advance, syntheticBold, halfSize));
     }
@@ -2168,8 +2166,11 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       widthPx += fp4::toPixel(prevAdvanceFP + kernFP);         // snap 12.4 fixed-point to nearest pixel
     }
 
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
-    prevAdvanceFP = EpdFont::advanceForRender(glyph ? glyph->advanceX : 0, syntheticBold, halfSize);
+    const EpdGlyph* glyph = sdIt == sdCardFonts_.end() ? font.getGlyph(cp, style) : nullptr;
+    const int32_t advance = sdIt != sdCardFonts_.end()
+                                ? sdIt->second->getAdvanceOrLoad(cp, resolveSdCardStyle(*sdIt->second, style))
+                                : (glyph ? glyph->advanceX : 0);
+    prevAdvanceFP = EpdFont::advanceForRender(advance, syntheticBold, halfSize);
     prevCp = cp;
   }
   widthPx += fp4::toPixel(prevAdvanceFP);  // final glyph's advance

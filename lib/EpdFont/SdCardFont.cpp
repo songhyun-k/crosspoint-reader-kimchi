@@ -1335,8 +1335,8 @@ void SdCardFont::mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sor
   if (oldSize >= ADVANCE_CACHE_LIMIT) return;  // already full
 
   // Cap the merged size at ADVANCE_CACHE_LIMIT. Anything past the cap is
-  // dropped from the tail of the sorted merge — a deterministic, bounded loss
-  // that doesn't bias which codepoints get cached on subsequent passes.
+  // dropped from the tail of the sorted merge. Oversized requests use the
+  // metric-only fallback for the remainder; later requests may replace the set.
   uint32_t mergedCap = oldSize + newCount;
   if (mergedCap > ADVANCE_CACHE_LIMIT) mergedCap = ADVANCE_CACHE_LIMIT;
 
@@ -1390,6 +1390,30 @@ uint16_t SdCardFont::getAdvance(uint32_t codepoint, uint8_t style) const {
   return 0;
 }
 
+uint16_t SdCardFont::getAdvanceOrLoad(uint32_t codepoint, uint8_t style) const {
+  if (!loaded_) return 0;
+  style = resolveStyle(style);
+  uint16_t advance = 0;
+  if (advanceTableLookup(style, codepoint, &advance)) return advance;  // includes valid zero advances
+  const auto& s = styles_[style];
+  if (!s.present) return 0;
+  int32_t index = findGlobalGlyphIndex(s, codepoint);
+  if (index < 0) index = findGlobalGlyphIndex(s, REPLACEMENT_GLYPH);
+  if (index < 0) return 0;
+
+  // Unlike getGlyph()/onGlyphMiss(), measuring text needs no bitmap allocation
+  // or bitmap SD read. The 16-byte record lives on the caller's stack.
+  HalFile file;
+  EpdGlyph glyph{};
+  if (!Storage.openFileForRead("SDCF", filePath_, file) ||
+      !file.seekSet(s.glyphsFileOffset + static_cast<uint32_t>(index) * sizeof(EpdGlyph)) ||
+      file.read(reinterpret_cast<uint8_t*>(&glyph), sizeof(glyph)) != sizeof(glyph)) {
+    LOG_ERR("SDCF", "Failed to read advance for U+%04X style %u", codepoint, style);
+    return 0;
+  }
+  return glyph.advanceX;
+}
+
 // Given a sorted array of unique codepoints, resolve glyph indices per style,
 // batch-read advanceX from SD, and merge into the persistent advance table.
 // Caller owns the codepoints buffer.
@@ -1399,10 +1423,15 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
     if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
     const auto& s = styles_[si];
 
-    // Stop fetching once the cache is full — further inserts would be dropped
-    // by the merge anyway. The renderer fast path tolerates missing entries
-    // (returns 0); the slow path is still correct for those codepoints.
-    if (advanceTableSize_[si] >= ADVANCE_CACHE_LIMIT) continue;
+    // Keep repeated/subset requests warm, but never freeze the cache at the
+    // first 768 characters in a book. Replace with the current paragraph when
+    // its missing entries no longer fit alongside the old set.
+    uint32_t missing = 0;
+    for (uint32_t i = 0; i < cpCount; ++i) {
+      if (!advanceTableLookup(si, codepoints[i], nullptr)) ++missing;
+    }
+    if (missing == 0) continue;
+    const bool replaceCache = advanceTableSize_[si] + missing > ADVANCE_CACHE_LIMIT;
 
     // For each codepoint in `codepoints`, skip those already cached, then
     // resolve to a glyph index. Build a parallel array sorted by glyph index
@@ -1423,7 +1452,7 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
     const int32_t replacementIdx = findGlobalGlyphIndex(s, REPLACEMENT_GLYPH);
     for (uint32_t i = 0; i < cpCount; i++) {
       const uint32_t cp = codepoints[i];
-      if (advanceTableLookup(si, cp, nullptr)) continue;  // already cached
+      if (!replaceCache && advanceTableLookup(si, cp, nullptr)) continue;
       int32_t idx = findGlobalGlyphIndex(s, cp);
       if (idx < 0) {
         if (replacementIdx < 0) {
@@ -1485,6 +1514,12 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
       // Sort staged by codepoint, then merge into the persistent table.
       std::sort(staged.get(), staged.get() + fetched,
                 [](const AdvanceEntry& a, const AdvanceEntry& b) { return a.codepoint < b.codepoint; });
+      if (replaceCache) {
+        // Do not evict usable entries until the replacement reads succeeded.
+        delete[] advanceTable_[si];
+        advanceTable_[si] = nullptr;
+        advanceTableSize_[si] = 0;
+      }
       mergeIntoAdvanceTable(si, staged.get(), fetched);
     }
 

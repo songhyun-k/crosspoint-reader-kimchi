@@ -1,6 +1,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <SdCardFont.h>
+#include <Utf8.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -172,4 +173,139 @@ TEST_F(SdCardFontLifetimeTest, ReleasingAnEmptyOrAlreadyReleasedFontIsSafe) {
   font.releaseResidentCaches();
   ASSERT_EQ(font.prewarm("fiﬁ", 1), 0);
   EXPECT_EQ(font.getEpdFont()->getLigature('f', 'i'), 0xFB01u);
+}
+
+namespace {
+// More than the bounded advance table, with visible bitmap payloads so a
+// measurement accidentally loading pixels is observable through the real HAL.
+std::vector<uint8_t> makeWideCoverageFont() {
+  using binary_fixture::append;
+  using binary_fixture::put;
+  constexpr uint32_t count = 1026;  // space, 1024 Hangul syllables, replacement
+  std::vector<uint8_t> bytes(64);
+  bytes.reserve(64 + 36 + count * 48);
+  std::memcpy(bytes.data(), "CPFONT\0\0", 8);
+  put(bytes, 8, CPFONT_VERSION, 2);
+  bytes[12] = 1;
+  put(bytes, 36, 3, 4);
+  put(bytes, 40, count, 4);
+  bytes[44] = 20;
+  put(bytes, 45, 16, 2);
+  put(bytes, 47, static_cast<uint16_t>(-4), 2);
+  put(bytes, 56, 64, 4);
+  append(bytes, EpdUnicodeInterval{' ', ' ', 0});
+  append(bytes, EpdUnicodeInterval{0xAC00, 0xAFFF, 1});
+  append(bytes, EpdUnicodeInterval{0xFFFD, 0xFFFD, count - 1});
+  for (uint32_t i = 0; i < count; ++i) {
+    EpdGlyph glyph{};
+    glyph.width = glyph.height = glyph.top = 16;
+    glyph.advanceX = (i == 0 ? 8 : i == count - 1 ? 12 : 16) * 16;
+    glyph.dataLength = 32;
+    glyph.dataOffset = i * 32;
+    append(bytes, glyph);
+  }
+  bytes.insert(bytes.end(), count * 32, 0xFF);
+  return bytes;
+}
+
+std::string hangulRange(uint32_t first, uint32_t count) {
+  std::string text;
+  text.reserve(count * 3);
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint32_t cp = 0xAC00 + first + i;
+    text += static_cast<char>(0xE0 | (cp >> 12));
+    text += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    text += static_cast<char>(0x80 | (cp & 0x3F));
+  }
+  return text;
+}
+}  // namespace
+
+TEST_F(SdCardFontLifetimeTest, SaturatedAdvanceTablePrioritizesTheNextParagraph) {
+  storage_test::files["font.cpfont"] = makeWideCoverageFont();
+  SdCardFont font;
+  ASSERT_TRUE(font.load("font.cpfont"));
+  ASSERT_EQ(font.buildAdvanceTable(hangulRange(0, 768).c_str(), 1), 0);
+  ASSERT_EQ(font.getAdvance(0xAC00, 0), 256);
+  for (int pass = 0; pass < 6; ++pass) {
+    const uint32_t first = pass % 2 == 0 ? 768 : 0;
+    const auto text = hangulRange(first, 256);
+    ASSERT_EQ(font.buildAdvanceTable(text.c_str(), 1), 0);
+    for (uint32_t i = 0; i < 256; ++i) {
+      ASSERT_EQ(font.getAdvance(0xAC00 + first + i, 0), 256);
+    }
+    const size_t reads = storage_test::reads;
+    ASSERT_EQ(font.buildAdvanceTable(text.c_str(), 1), 0);
+    EXPECT_EQ(storage_test::reads, reads);  // repeated paragraph stays warm
+  }
+}
+
+TEST_F(SdCardFontLifetimeTest, LayoutBeyondAdvanceCapacityNeverReadsBitmaps) {
+  storage_test::files["font.cpfont"] = makeWideCoverageFont();
+  SdCardFont font;
+  ASSERT_TRUE(font.load("font.cpfont"));
+  const auto text = hangulRange(0, 900);
+  ASSERT_EQ(font.buildAdvanceTable(text.c_str(), 1), 0);
+  HalDisplay panel;
+  GfxRenderer renderer(panel);
+  renderer.insertFont(100, EpdFontFamily(font.getEpdFont()));
+  renderer.registerSdCardFont(100, &font);
+  storage_test::reads = storage_test::largestRead = 0;
+  EXPECT_EQ(renderer.getTextAdvanceX(100, text.c_str(), EpdFontFamily::REGULAR), 900 * 16);
+  EXPECT_EQ(storage_test::reads, 900u - 768u);  // one metadata read per uncached glyph
+  EXPECT_LE(storage_test::largestRead, sizeof(EpdGlyph));
+  renderer.removeFont(100);
+}
+
+TEST_F(SdCardFontLifetimeTest, ColdMeasurementAndStyleFallbackNeverLoadPixels) {
+  storage_test::files["font.cpfont"] = makeWideCoverageFont();
+  SdCardFont font;
+  ASSERT_TRUE(font.load("font.cpfont"));
+  HalDisplay panel;
+  GfxRenderer renderer(panel);
+  renderer.insertFont(100, EpdFontFamily(font.getEpdFont()));
+  renderer.registerSdCardFont(100, &font);
+  storage_test::reads = storage_test::largestRead = 0;
+  EXPECT_EQ(renderer.getTextAdvanceX(100, "가", EpdFontFamily::BOLD), 17);
+  EXPECT_EQ(renderer.getTextAdvanceX(100, "A", EpdFontFamily::REGULAR), 12);  // replacement advance
+  EXPECT_EQ(renderer.getSpaceWidth(100), 8);
+  EXPECT_EQ(renderer.getSpaceAdvance(100, 0xAC00, 0xAC01, EpdFontFamily::REGULAR), 8);
+  EXPECT_EQ(storage_test::reads, 4u);
+  EXPECT_LE(storage_test::largestRead, sizeof(EpdGlyph));
+  renderer.removeFont(100);
+}
+
+TEST_F(SdCardFontLifetimeTest, LoadedShapingStillUsesMetadataOnlyOnAdvanceMiss) {
+  storage_test::files["font.cpfont"] = makeFont().bytes;
+  SdCardFont font;
+  ASSERT_TRUE(font.load("font.cpfont"));
+  ASSERT_EQ(font.prewarm("f", 1), 0);
+  ASSERT_NE(font.getEpdFont()->data->ligaturePairs, nullptr);
+  ASSERT_EQ(font.buildAdvanceTable("f", 1), 0);
+  HalDisplay panel;
+  GfxRenderer renderer(panel);
+  renderer.insertFont(100, EpdFontFamily(font.getEpdFont()));
+  renderer.registerSdCardFont(100, &font);
+  storage_test::reads = 0;
+  EXPECT_EQ(renderer.getTextAdvanceX(100, "i", EpdFontFamily::REGULAR), 1);
+  EXPECT_EQ(storage_test::reads, 1u);  // i is absent from both mini and advance caches
+  renderer.removeFont(100);
+}
+
+TEST_F(SdCardFontLifetimeTest, CachedZeroAdvanceDoesNotBecomeAnIoMiss) {
+  auto bytes = makeFont().bytes;
+  // First glyph is f: header/TOC (64) + four intervals (48), then advanceX at +2.
+  binary_fixture::put(bytes, 64 + 48 + 2, 0, 2);
+  storage_test::files["font.cpfont"] = std::move(bytes);
+  SdCardFont font;
+  ASSERT_TRUE(font.load("font.cpfont"));
+  ASSERT_EQ(font.buildAdvanceTable("f", 1), 0);
+  HalDisplay panel;
+  GfxRenderer renderer(panel);
+  renderer.insertFont(100, EpdFontFamily(font.getEpdFont()));
+  renderer.registerSdCardFont(100, &font);
+  storage_test::reads = 0;
+  EXPECT_EQ(renderer.getTextAdvanceX(100, "f", EpdFontFamily::REGULAR), 0);
+  EXPECT_EQ(storage_test::reads, 0u);
+  renderer.removeFont(100);
 }

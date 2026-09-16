@@ -330,30 +330,8 @@ bool EpubReaderActivity::hasInputActivity() const {
 void EpubReaderActivity::runBackgroundWork() {
   const bool allowSpeculativeWork = !hasInputActivity();
 
-  constexpr unsigned long IDLE_PREWARM_DEBOUNCE_MS = 400;
-  if (allowSpeculativeWork && section && !section->isBuilding() && !RenderLock::peek() && renderer.hasFrameBuffer() &&
-      lastRenderCompleteMs != 0 && millis() - lastRenderCompleteMs > IDLE_PREWARM_DEBOUNCE_MS &&
-      ESP.getFreeHeap() > RENDER_MIN_FREE_HEAP && ESP.getMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
-      (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
-    RenderLock lock;
-    if (section && !section->isBuilding() &&
-        (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
-      idlePrewarmSpine = currentSpineIndex;
-      idlePrewarmPage = section->currentPage;
-      const int nextPage = section->currentPage + 1;
-      if (nextPage < static_cast<int>(section->pageCount)) {
-        if (const auto p = section->loadPage(nextPage)) {
-          if (auto* fcm = renderer.getFontCacheManager()) {
-            const auto t0 = millis();
-            auto scope = fcm->createPrewarmScope();
-            p->render(renderer, SETTINGS.getReaderFontId(), 0, 0);
-            scope.endScanAndPrewarm();
-            LOG_DBG("ERS", "Idle prewarm: page %d in %lums", nextPage, millis() - t0);
-          }
-        }
-      }
-    }
-  }
+  constexpr unsigned long IDLE_FINISH_DELAY_MS = 1000;
+  const bool finishWhileIdle = lastRenderCompleteMs != 0 && millis() - lastRenderCompleteMs > IDLE_FINISH_DELAY_MS;
 
   if (section && (allowSpeculativeWork || section->currentPage >= static_cast<int>(section->pageCount)) &&
       !section->isBuilding() && section->isPartial() && !RenderLock::peek() && buildViewportWidth > 0 &&
@@ -372,16 +350,40 @@ void EpubReaderActivity::runBackgroundWork() {
 
   if (section && (allowSpeculativeWork || section->currentPage >= static_cast<int>(section->pageCount)) &&
       section->isBuilding() && !RenderLock::peek() &&
-      (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD) &&
+      (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD ||
+       finishWhileIdle) &&
       buildTickHeapGate()) {
     RenderLock lock;
     if (section->isBuilding() && buildTickHeapGate()) {
-      if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
+      if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK, 1)) {
         LOG_ERR("ERS", "Background section build failed");
         section.reset();
         requestUpdate();
       } else if (section->isBuildComplete() && applyDeferredReposition()) {
         requestUpdate();
+      }
+    }
+  }
+  constexpr unsigned long IDLE_PREWARM_DEBOUNCE_MS = 400;
+  if (allowSpeculativeWork && section && !RenderLock::peek() && renderer.hasFrameBuffer() &&
+      lastRenderCompleteMs != 0 && millis() - lastRenderCompleteMs > IDLE_PREWARM_DEBOUNCE_MS &&
+      ESP.getFreeHeap() > RENDER_MIN_FREE_HEAP && ESP.getMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
+      (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
+    RenderLock lock;
+    if (section && (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
+      const int nextPage = section->currentPage + 1;
+      if (nextPage < static_cast<int>(section->pageCount)) {
+        if (const auto p = section->loadPage(nextPage)) {
+          if (auto* fcm = renderer.getFontCacheManager()) {
+            const auto t0 = millis();
+            auto scope = fcm->createPrewarmScope();
+            p->render(renderer, SETTINGS.getReaderFontId(), 0, 0);
+            scope.endScanAndPrewarm();
+            idlePrewarmSpine = currentSpineIndex;
+            idlePrewarmPage = section->currentPage;
+            LOG_DBG("ERS", "Idle prewarm: page %d in %lums", nextPage, millis() - t0);
+          }
+        }
       }
     }
   }
@@ -1180,6 +1182,7 @@ void EpubReaderActivity::renderBook() {
     LOG_DBG("ERS", "Loading file: %s, index: %d", filepath.c_str(), currentSpineIndex);
     section = std::unique_ptr<Section>(new Section(epub, currentSpineIndex, renderer));
     partialRebuildStartFailed = false;
+    idlePrewarmSpine = idlePrewarmPage = -1;  // rebuilt pages at the same position need a new scan
 
     const bool cacheLoaded = section->loadSectionFile(renderSpec);
     if (cacheLoaded) {

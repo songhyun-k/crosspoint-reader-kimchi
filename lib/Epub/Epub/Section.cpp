@@ -458,7 +458,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   return true;
 }
 
-bool Section::buildSomeMore(const int maxPages) {
+bool Section::buildSomeMore(const int maxPages, const int maxParseSteps) {
   if (!build_ || !build_->parser) {
     LOG_ERR("SCT", "buildSomeMore with no active build");
     return false;
@@ -467,7 +467,7 @@ bool Section::buildSomeMore(const int maxPages) {
   // pageCount stays pinned at the partial's watermark until the build passes it, which
   // would otherwise turn one "small" chunk into a blocking rebuild of the whole watermark.
   const int startCount = builtPageCount_;
-  for (;;) {
+  for (int steps = 0;; ++steps) {
     const auto status = build_->parser->parseStep();
     if (status == ChapterHtmlSlimParser::ParseStatus::Error) {
       LOG_ERR("SCT", "Parse error during incremental build");
@@ -478,7 +478,8 @@ bool Section::buildSomeMore(const int maxPages) {
       return finalizeBuild();
     }
     // ParseStatus::More: yield once we've laid out the requested number of pages.
-    if (maxPages > 0 && (builtPageCount_ - startCount) >= maxPages) {
+    if ((maxPages > 0 && (builtPageCount_ - startCount) >= maxPages) ||
+        (maxParseSteps > 0 && steps + 1 >= maxParseSteps)) {
       build_->bytesConsumed = build_->parser->parseBytesConsumed();
       return true;
     }

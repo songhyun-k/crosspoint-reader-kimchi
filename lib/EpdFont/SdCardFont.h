@@ -78,6 +78,10 @@ class SdCardFont {
   // Returns the 12.4 fixed-point advance, or 0 if not found.
   uint16_t getAdvance(uint32_t codepoint, uint8_t style) const;
 
+  // Layout fallback: read only the glyph record on a cache miss, never its
+  // bitmap. Also works before the first advance table or after cache release.
+  uint16_t getAdvanceOrLoad(uint32_t codepoint, uint8_t style) const;
+
   // Returns true if advance table is populated for at least one style.
   bool hasAdvanceTable() const;
 
@@ -293,8 +297,8 @@ class SdCardFont {
   };
   // Per-style advance table. Sorted by codepoint for binary lookup.
   // Bounded to ADVANCE_CACHE_LIMIT entries; persists across layout passes
-  // (across calls to clearCache()) so repeated indexing of the same font
-  // amortizes SD reads. Cleared only on font unload or clearPersistentCache().
+  // (across calls to clearCache()) so repeated indexing amortizes SD reads.
+  // On saturation the next request replaces old entries, without growing RAM.
   static constexpr uint32_t ADVANCE_CACHE_LIMIT = 768;
   AdvanceEntry* advanceTable_[MAX_STYLES] = {};
   uint32_t advanceTableSize_[MAX_STYLES] = {};
