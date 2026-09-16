@@ -44,6 +44,29 @@ void FontCacheManager::clearCache() {
   }
 }
 
+void FontCacheManager::releaseScopeCache() {
+  if (fontDecompressor_) fontDecompressor_->releaseTransientCache();
+  for (auto& [id, font] : sdCardFonts_) {
+    font->clearCache();
+  }
+}
+
+void FontCacheManager::retainScanFonts() {
+  if (!fontDecompressor_) return;
+  const EpdFontData* fonts[SCAN_GROUP_COUNT];
+  uint8_t count = 0;
+  for (uint8_t group = 0; group < SCAN_GROUP_COUNT; group++) {
+    if (scanGroupCounts_[group] == 0) continue;
+    const int fontId = scanFontIds_[group / 4];
+    if (sdCardFonts_.count(fontId)) continue;
+    const auto font = fontMap_.find(fontId);
+    if (font == fontMap_.end()) continue;
+    const auto* data = font->second.getData(static_cast<EpdFontFamily::Style>(group & 0x03));
+    if (data && data->groups) fonts[count++] = data;
+  }
+  fontDecompressor_->retainFonts(fonts, count);
+}
+
 void FontCacheManager::releaseSdFontCaches() {
   if (fontDecompressor_) fontDecompressor_->clearCache();
   for (auto& [id, font] : sdCardFonts_) {
@@ -64,6 +87,17 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
 
   // Standard compressed font prewarm path: loop over all requested styles
   if (!fontDecompressor_ || fontMap_.count(fontId) == 0) return;
+
+  // A direct prewarm (settings preview / dictionary highlight) is its own batch.
+  // Scan batches have already retained every requested font before this loop.
+  if (scanMode_ == ScanMode::None) {
+    const EpdFontData* fonts[4];
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < 4; i++) {
+      if (styleMask & (1 << i)) fonts[count++] = fontMap_.at(fontId).getData(static_cast<EpdFontFamily::Style>(i));
+    }
+    fontDecompressor_->retainFonts(fonts, count);
+  }
 
   for (uint8_t i = 0; i < 4; i++) {
     if (!(styleMask & (1 << i))) continue;
@@ -160,7 +194,7 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
 
 FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager) : manager_(&manager) {
   manager_->scanMode_ = ScanMode::Scanning;
-  manager_->clearCache();
+  manager_->releaseScopeCache();
   manager_->resetStats();
   manager_->scanCodepointCount_ = 0;
   manager_->scanFontCount_ = 0;
@@ -172,6 +206,8 @@ void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
   manager_->scanMode_ = ScanMode::None;
   if (manager_->scanCodepointCount_ == 0) return;
 
+  manager_->retainScanFonts();
+  manager_->scanMode_ = ScanMode::Prewarming;
   std::sort(manager_->scanCodepoints_, manager_->scanCodepoints_ + manager_->scanCodepointCount_);
 
   uint16_t groupStarts[SCAN_GROUP_COUNT] = {};
@@ -200,6 +236,7 @@ void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
     manager_->prewarmCache(manager_->scanFontIds_[fontSlot], utf8Text, 1 << style);
   }
 
+  manager_->scanMode_ = ScanMode::None;
   manager_->scanCodepointCount_ = 0;
   manager_->scanFontCount_ = 0;
   memset(manager_->scanGroupCounts_, 0, sizeof(manager_->scanGroupCounts_));
@@ -208,7 +245,7 @@ void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
 FontCacheManager::PrewarmScope::~PrewarmScope() {
   if (active_) {
     endScanAndPrewarm();  // no-op if already called
-    manager_->clearCache();
+    manager_->releaseScopeCache();
   }
 }
 

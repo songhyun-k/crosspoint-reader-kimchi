@@ -53,7 +53,7 @@ class FontCacheManager {
   const std::map<int, SdCardFont*>& sdCardFonts_;
   FontDecompressor* fontDecompressor_ = nullptr;
 
-  enum class ScanMode : uint8_t { None, Scanning };
+  enum class ScanMode : uint8_t { None, Scanning, Prewarming };
   ScanMode scanMode_ = ScanMode::None;
 
   // A render pass touches at most a handful of font ids. Codepoints are packed
@@ -65,6 +65,8 @@ class FontCacheManager {
   static constexpr uint32_t SCAN_CODEPOINT_MASK = (1U << SCAN_STYLE_SHIFT) - 1;
   static constexpr uint8_t SCAN_GROUP_COUNT = MAX_SCAN_FONTS * 4;
 
+  void releaseScopeCache();
+  void retainScanFonts();
   uint8_t resolveScanStyle(int fontId, EpdFontFamily::Style style) const;
   int scanFontIds_[MAX_SCAN_FONTS] = {};
   uint32_t scanCodepoints_[MAX_SCAN_CODEPOINTS + 1] = {};

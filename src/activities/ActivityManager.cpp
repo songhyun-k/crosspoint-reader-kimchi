@@ -179,6 +179,7 @@ void ActivityManager::loop() {
           stackActivities.pop_back();
         }
       } else if (pendingAction == PendingAction::Push) {
+        if (auto* fcm = renderer.getFontCacheManager()) fcm->clearCache();
         // Move current activity to stack
         stackActivities.push_back(std::move(currentActivity));
         LOG_DBG("ACT", "Pushed to activity stack, new size = %zu", stackActivities.size());
@@ -205,6 +206,7 @@ void ActivityManager::loop() {
 
 void ActivityManager::exitActivity(const RenderLock& lock) {
   // Note: lock must be held by the caller
+  if (auto* fcm = renderer.getFontCacheManager()) fcm->clearCache();
   if (currentActivity) {
     currentActivity->onExit();
     currentActivity.reset();
