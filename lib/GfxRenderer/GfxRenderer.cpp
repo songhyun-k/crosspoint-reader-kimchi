@@ -387,7 +387,14 @@ enum class TextRotation { None, Rotated90CW };
 template <TextRotation rotation = TextRotation::None>
 static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
                              const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
-                             const bool pixelState, const EpdFontFamily::Style style) {
+                             const bool pixelState, const EpdFontFamily::Style style,
+                             uint8_t* grayMsbTarget = nullptr) {
+  if (grayMsbTarget) {
+    auto* lsb = renderer.getWriteTarget();
+    renderer.beginStripTarget(grayMsbTarget, 0, renderer.getDisplayHeight());
+    renderCharScaled<rotation>(renderer, renderMode, fontFamily, cp, cursorX, cursorY, pixelState, style);
+    renderer.beginStripTarget(lsb, 0, renderer.getDisplayHeight());
+  }
   const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
   if (!glyph) return;
 
@@ -466,9 +473,10 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
 
 // Portrait glyph rows run across physical rows, with one fixed bit mask per glyph row.
 // Partially clipped glyphs and other orientations retain the general pixel path.
+template <bool dualGray = false>
 static bool renderPortrait2BitGlyph(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
                                     const uint8_t* bitmap, int x, int y, int width, int height, bool syntheticBold,
-                                    bool pixelState) {
+                                    bool pixelState, uint8_t* grayMsbTarget = nullptr) {
   const auto orientation = renderer.getOrientation();
   if ((orientation != GfxRenderer::Portrait && orientation != GfxRenderer::PortraitInverted) || width == 0 ||
       height == 0) {
@@ -510,24 +518,47 @@ static bool renderPortrait2BitGlyph(const GfxRenderer& renderer, GfxRenderer::Re
       ++pixelPosition;
       const uint8_t merged = syntheticBold ? std::max(raw, previousRaw) : raw;
       previousRaw = raw;
-      if ((coverageMask >> merged) & 1) {
+      if constexpr (dualGray) {
+        if (merged == 2) target[byteIndex] |= mask;
+        if (merged == 1 || merged == 2) grayMsbTarget[byteIndex] |= mask;
+      } else if ((coverageMask >> merged) & 1) {
         target[byteIndex] = (target[byteIndex] & keepMask) | inkMask;
       }
       byteIndex += byteStep;
     }
     // The extra bold column has no source sample; merge coverage before plane selection.
-    if (syntheticBold && ((coverageMask >> previousRaw) & 1)) {
-      target[byteIndex] = (target[byteIndex] & keepMask) | inkMask;
+    if (syntheticBold) {
+      if constexpr (dualGray) {
+        if (previousRaw == 2) target[byteIndex] |= mask;
+        if (previousRaw == 1 || previousRaw == 2) grayMsbTarget[byteIndex] |= mask;
+      } else if ((coverageMask >> previousRaw) & 1) {
+        target[byteIndex] = (target[byteIndex] & keepMask) | inkMask;
+      }
     }
     physicalX += portrait ? 1 : -1;
   }
   return true;
 }
 
+// Clipped, combining and rotated glyphs keep the general coordinate mapping.
+static void drawDualGrayPixel(const GfxRenderer& renderer, uint8_t* msb, int x, int y, uint8_t coverage) {
+  if (coverage != 1 && coverage != 2) return;
+  int px, py;
+  rotateCoordinates(renderer.getOrientation(), x, y, &px, &py, renderer.getDisplayWidth(), renderer.getDisplayHeight());
+  if (px < 0 || px >= renderer.getDisplayWidth() || py < 0 || py >= renderer.getDisplayHeight()) return;
+  const int row = py - renderer.getWriteOriginY();
+  if (row < 0 || row >= renderer.getWriteRows()) return;
+  const size_t index = static_cast<size_t>(row) * renderer.getDisplayWidthBytes() + (px >> 3);
+  const uint8_t mask = 0x80 >> (px & 7);
+  msb[index] |= mask;
+  if (coverage == 2) renderer.getWriteTarget()[index] |= mask;
+}
+
 template <TextRotation rotation = TextRotation::None>
 static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
                            const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
-                           const bool pixelState, const EpdFontFamily::Style style, const bool isCombining = false) {
+                           const bool pixelState, const EpdFontFamily::Style style, const bool isCombining = false,
+                           uint8_t* grayMsbTarget = nullptr) {
   const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
   if (!glyph) {
     LOG_ERR("GFX", "No glyph for codepoint %d", cp);
@@ -536,6 +567,13 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
 
   const EpdFontData* fontData = fontFamily.getData(style);
   const bool is2Bit = fontData->is2Bit;
+  // Monochrome glyphs retain their per-plane path without taxing drawPixel().
+  if (grayMsbTarget && !is2Bit) {
+    auto* lsb = renderer.getWriteTarget();
+    renderer.beginStripTarget(grayMsbTarget, 0, renderer.getDisplayHeight());
+    renderCharImpl<rotation>(renderer, renderMode, fontFamily, cp, cursorX, cursorY, pixelState, style, isCombining);
+    renderer.beginStripTarget(lsb, 0, renderer.getDisplayHeight());
+  }
   const uint8_t width = glyph->width;
   const uint8_t height = glyph->height;
   const int left = glyph->left;
@@ -575,10 +613,13 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     }
 
     if constexpr (rotation == TextRotation::None) {
-      if (is2Bit && !isCombining &&
-          renderPortrait2BitGlyph(renderer, renderMode, bitmap, innerBase, outerBase, width, height, syntheticBold,
-                                  pixelState)) {
-        return;
+      if (is2Bit && !isCombining) {
+        const bool rendered =
+            grayMsbTarget ? renderPortrait2BitGlyph<true>(renderer, renderMode, bitmap, innerBase, outerBase, width,
+                                                          height, syntheticBold, pixelState, grayMsbTarget)
+                          : renderPortrait2BitGlyph(renderer, renderMode, bitmap, innerBase, outerBase, width, height,
+                                                    syntheticBold, pixelState);
+        if (rendered) return;
       }
     }
 
@@ -613,7 +654,9 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
           // 0 -> black, 1 -> dark grey, 2 -> light grey, 3 -> white
           const uint8_t bmpVal = 3 - merged;
 
-          if (renderMode == GfxRenderer::BW && bmpVal < 3) {
+          if (grayMsbTarget) {
+            drawDualGrayPixel(renderer, grayMsbTarget, screenX, screenY, merged);
+          } else if (renderMode == GfxRenderer::BW && bmpVal < 3) {
             // Black (also paints over the grays in BW mode)
             renderer.drawPixel(screenX, screenY, pixelState);
           } else if (renderMode == GfxRenderer::GRAYSCALE_MSB && (bmpVal == 1 || bmpVal == 2)) {
@@ -801,7 +844,8 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
           combiningMark::raiseAboveBase(anchor, combiningGlyph->top, combiningGlyph->height, lastBaseTop);
       const int combiningX = combiningMark::anchorOver(anchor, lastBaseX, lastBaseLeft, lastBaseWidth,
                                                        combiningGlyph->left, combiningGlyph->width);
-      renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, combiningX, yPos - raiseBy, black, style, true);
+      renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, combiningX, yPos - raiseBy, black, style, true,
+                                         dualGrayMsbTarget_);
       continue;
     }
 
@@ -824,9 +868,11 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
 
     if (isSupSub) {
       // yPos already carries the vertical offset applied by TextBlock::render().
-      renderCharScaled<TextRotation::None>(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
+      renderCharScaled<TextRotation::None>(*this, renderMode, font, cp, lastBaseX, yPos, black, style,
+                                           dualGrayMsbTarget_);
     } else {
-      renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
+      renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, lastBaseX, yPos, black, style, false,
+                                         dualGrayMsbTarget_);
     }
     prevCp = cp;
   }
@@ -860,6 +906,12 @@ const char* resolveVisualText(const char* text, std::string& visualBuffer, const
 
 void GfxRenderer::drawLine(int x1, int y1, int x2, int y2, const bool state) const {
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
+  if (dualGrayMsbTarget_ && _stripBuf != dualGrayMsbTarget_) {
+    auto* lsb = _stripBuf;
+    _stripBuf = dualGrayMsbTarget_;
+    drawLine(x1, y1, x2, y2, state);
+    _stripBuf = lsb;
+  }
   if (x1 == x2) {
     if (y2 < y1) {
       std::swap(y1, y2);
@@ -1731,6 +1783,7 @@ void GfxRenderer::clearScreen(const uint8_t color) const {
   if (_stripActive) {
     // Clear only the active band's scratch, not the shared framebuffer.
     memset(_stripBuf, color, static_cast<size_t>(panelWidthBytes) * _stripRows);
+    if (dualGrayMsbTarget_) memset(dualGrayMsbTarget_, color, static_cast<size_t>(panelWidthBytes) * _stripRows);
     return;
   }
   display.clearScreen(color);
@@ -1752,6 +1805,31 @@ void GfxRenderer::endStripTarget() const {
   _stripBuf = nullptr;
   _stripY0 = 0;
   _stripRows = 0;
+}
+
+GfxRenderer::DualGrayTextScope::DualGrayTextScope(GfxRenderer& renderer, uint8_t* lsb, uint8_t* msb, size_t capacity)
+    : renderer_(renderer), previousMode_(renderer.renderMode) {
+  if (!lsb || !msb || !renderer.frameBuffer || !renderer.frameBufferSize || capacity < renderer.frameBufferSize ||
+      renderer._stripActive || renderer.dualGrayMsbTarget_ || renderer.isFontCacheScanning() ||
+      (renderer.orientation != Portrait && renderer.orientation != PortraitInverted)) {
+    return;
+  }
+  const auto overlaps = [size = renderer.frameBufferSize](const uint8_t* a, const uint8_t* b) {
+    const auto x = reinterpret_cast<uintptr_t>(a), y = reinterpret_cast<uintptr_t>(b);
+    return (x > y ? x - y : y - x) < size;
+  };
+  if (overlaps(lsb, msb) || overlaps(lsb, renderer.frameBuffer) || overlaps(msb, renderer.frameBuffer)) return;
+  renderer.beginStripTarget(lsb, 0, renderer.panelHeight);
+  renderer.dualGrayMsbTarget_ = msb;
+  renderer.renderMode = GRAYSCALE_LSB;
+  active_ = true;
+}
+
+GfxRenderer::DualGrayTextScope::~DualGrayTextScope() {
+  if (!active_) return;
+  renderer_.dualGrayMsbTarget_ = nullptr;
+  renderer_.endStripTarget();
+  renderer_.renderMode = previousMode_;
 }
 
 bool GfxRenderer::glyphIntersectsStrip(int x0, int y0, int x1, int y1) const {
@@ -2259,7 +2337,8 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
       const int combiningX = x - raiseBy;
       const int combiningY = combiningMark::anchorOverRotated90CW(anchor, lastBaseY, lastBaseLeft, lastBaseWidth,
                                                                   combiningGlyph->left, combiningGlyph->width);
-      renderCharImpl<TextRotation::Rotated90CW>(*this, renderMode, font, cp, combiningX, combiningY, black, style);
+      renderCharImpl<TextRotation::Rotated90CW>(*this, renderMode, font, cp, combiningX, combiningY, black, style,
+                                                false, dualGrayMsbTarget_);
       continue;
     }
 
@@ -2279,9 +2358,11 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
     lastBaseTop = glyph ? glyph->top : 0;
     prevAdvanceFP = EpdFont::advanceForRender(glyph ? glyph->advanceX : 0, syntheticBold, halfSize);
     if (halfSize) {
-      renderCharScaled<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, lastBaseY, black, style);
+      renderCharScaled<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, lastBaseY, black, style,
+                                                  dualGrayMsbTarget_);
     } else {
-      renderCharImpl<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, lastBaseY, black, style);
+      renderCharImpl<TextRotation::Rotated90CW>(*this, renderMode, font, cp, x, lastBaseY, black, style, false,
+                                                dualGrayMsbTarget_);
     }
     prevCp = cp;
   }

@@ -82,6 +82,7 @@ class GfxRenderer {
   mutable int _stripY0 = 0;
   mutable int _stripRows = 0;
   mutable bool _stripActive = false;
+  uint8_t* dualGrayMsbTarget_ = nullptr;
 
   // CJK UI font fallback map: primary (built-in, Latin-only) UI font id -> a
   // size-matched SD-card font id that carries CJK glyphs. When a string drawn
@@ -224,6 +225,23 @@ class GfxRenderer {
   // grayscale planes band-by-band without a full second buffer.
   void beginStripTarget(uint8_t* scratch, int stripY0, int stripRows) const;
   void endStripTarget() const;
+
+  // Text, drawLine and clearScreen only, using two existing, disjoint full-plane buffers.
+  // Inert for other orientations, a live strip, missing/aliased buffers or a scan.
+  // Do not change render mode, orientation or strip target inside this scope.
+  class DualGrayTextScope {
+   public:
+    DualGrayTextScope(GfxRenderer& renderer, uint8_t* lsb, uint8_t* msb, size_t capacity);
+    ~DualGrayTextScope();
+    bool active() const { return active_; }
+    DualGrayTextScope(const DualGrayTextScope&) = delete;
+    DualGrayTextScope& operator=(const DualGrayTextScope&) = delete;
+
+   private:
+    GfxRenderer& renderer_;
+    RenderMode previousMode_;
+    bool active_ = false;
+  };
 
   // Band culling for tiled grayscale. Takes a glyph bounding box in logical
   // screen coords and returns false only when a strip is active AND the box's

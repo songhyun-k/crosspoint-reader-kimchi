@@ -1613,8 +1613,19 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     auto msbPlaneBuf = (lsbPlaneBuf && planeBufFits()) ? makeUniqueNoThrow<uint8_t[]>(planeBytes) : nullptr;
 
     if (lsbPlaneBuf) {
-      renderPlaneToBuffer(true, lsbPlaneBuf.get());
-      if (msbPlaneBuf) renderPlaneToBuffer(false, msbPlaneBuf.get());
+      bool renderedTogether = false;
+      if (msbPlaneBuf && needsTextGrayscale && !pageHasImages) {
+        GfxRenderer::DualGrayTextScope grayScope(renderer, lsbPlaneBuf.get(), msbPlaneBuf.get(), planeBytes);
+        if (grayScope.active()) {
+          renderer.clearScreen(0x00);
+          renderGrayscalePass();
+          renderedTogether = true;
+        }
+      }
+      if (!renderedTogether) {
+        renderPlaneToBuffer(true, lsbPlaneBuf.get());
+        if (msbPlaneBuf) renderPlaneToBuffer(false, msbPlaneBuf.get());
+      }
       const auto tGrayRender = millis();
 
       renderer.waitRefreshComplete();
