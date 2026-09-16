@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 
 class FontDecompressor;
 class SdCardFont;
@@ -26,7 +27,9 @@ class FontCacheManager {
 
   // Scan-mode API: called by GfxRenderer::drawText() during scan pass
   bool isScanning() const;
-  void recordText(const char* text, int fontId, EpdFontFamily::Style style);
+  void recordText(const char* text, int fontId, EpdFontFamily::Style style) {
+    if (text && *text) recordNonEmptyText(text, fontId, style);
+  }
 
   // The FontDecompressor pointer, needed by GfxRenderer::getGlyphBitmap()
   FontDecompressor* getDecompressor() const { return fontDecompressor_; }
@@ -64,9 +67,15 @@ class FontCacheManager {
   static constexpr uint8_t SCAN_FONT_SHIFT = SCAN_STYLE_SHIFT + 2;
   static constexpr uint32_t SCAN_CODEPOINT_MASK = (1U << SCAN_STYLE_SHIFT) - 1;
   static constexpr uint8_t SCAN_GROUP_COUNT = MAX_SCAN_FONTS * 4;
+  static constexpr uint16_t SCAN_LOOKUP_SLOTS = 1024;
+  static constexpr uint16_t SCAN_LOOKUP_THRESHOLD = 64;
 
   void releaseScopeCache();
   void retainScanFonts();
+  void recordNonEmptyText(const char* text, int fontId, EpdFontFamily::Style style);
+  const unsigned char* recordIndexed(const unsigned char* cursor, uint32_t packedGroup, uint8_t group);
+  void buildScanLookup();
+  uint16_t findScanLookupSlot(uint32_t packed) const;
   uint8_t resolveScanStyle(int fontId, EpdFontFamily::Style style) const;
   int scanFontIds_[MAX_SCAN_FONTS] = {};
   uint32_t scanCodepoints_[MAX_SCAN_CODEPOINTS + 1] = {};
@@ -74,4 +83,7 @@ class FontCacheManager {
   uint16_t scanCodepointCount_ = 0;
   uint8_t scanFontCount_ = 0;
   bool scanOverflowWarned_ = false;
+  bool scanLookupAttempted_ = false;
+  // Values are admission index + 1; scratch is released before bitmap prewarming.
+  std::unique_ptr<uint16_t[]> scanLookup_;
 };

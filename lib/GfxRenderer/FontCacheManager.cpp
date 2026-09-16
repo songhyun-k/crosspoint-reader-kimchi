@@ -1,7 +1,9 @@
 #include "FontCacheManager.h"
 
+#include <Arduino.h>
 #include <FontDecompressor.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <SdCardFont.h>
 #include <Utf8.h>
 
@@ -9,6 +11,11 @@
 #include <cstring>
 
 namespace {
+
+bool scanScratchFits(const size_t bytes) {
+  // Leave the reader's gray-plane headroom available to other scan-time work.
+  return ESP.getFreeHeap() >= 60000 + bytes && ESP.getMaxAllocHeap() >= 16 * 1024 + bytes;
+}
 
 char* appendUtf8Codepoint(char* output, const uint32_t codepoint) {
   if (codepoint < 0x80) {
@@ -143,9 +150,68 @@ uint8_t FontCacheManager::resolveScanStyle(int fontId, EpdFontFamily::Style styl
   return baseStyle;
 }
 
-void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::Style style) {
-  if (!text || *text == '\0') return;
+uint16_t FontCacheManager::findScanLookupSlot(const uint32_t packed) const {
+  uint16_t slot = (packed * 2654435761u) >> 22;
+  for (uint16_t probes = 0; probes < SCAN_LOOKUP_SLOTS; ++probes) {
+    const uint16_t entry = scanLookup_[slot];
+    if (entry == 0 || scanCodepoints_[entry - 1] == packed) return slot;
+    slot = (slot + 1) & (SCAN_LOOKUP_SLOTS - 1);
+  }
+  return SCAN_LOOKUP_SLOTS;
+}
 
+void FontCacheManager::buildScanLookup() {
+  scanLookupAttempted_ = true;
+  if (!scanScratchFits(SCAN_LOOKUP_SLOTS * sizeof(uint16_t))) return;
+  scanLookup_ = makeUniqueNoThrow<uint16_t[]>(SCAN_LOOKUP_SLOTS);
+  if (!scanLookup_) {
+    LOG_ERR("FCM", "Scan index allocation failed; using linear lookup");
+    return;
+  }
+  for (uint16_t i = 0; i < scanCodepointCount_; ++i) {
+    const uint16_t slot = findScanLookupSlot(scanCodepoints_[i]);
+    if (slot == SCAN_LOOKUP_SLOTS) {
+      scanLookup_.reset();
+      return;
+    }
+    scanLookup_[slot] = i + 1;
+  }
+}
+
+// Keep hash probing out of the small-scan path's stack frame.
+[[gnu::noinline]] const unsigned char* FontCacheManager::recordIndexed(const unsigned char* cursor,
+                                                                       const uint32_t packedGroup,
+                                                                       const uint8_t group) {
+  while (*cursor) {
+    const unsigned char* const start = cursor;
+    const uint32_t codepoint = utf8NextCodepoint(&cursor);
+    if (codepoint == 0) return nullptr;
+
+    const uint32_t packed = packedGroup | codepoint;
+    const uint16_t slot = findScanLookupSlot(packed);
+    if (slot == SCAN_LOOKUP_SLOTS) {
+      scanLookup_.reset();
+      return start;
+    }
+    if (scanLookup_[slot]) continue;
+
+    if (scanCodepointCount_ >= MAX_SCAN_CODEPOINTS) {
+      if (!scanOverflowWarned_) {
+        LOG_DBG("FCM", "Scan codepoint cap (%u) reached; excess glyphs will load on demand",
+                static_cast<unsigned>(MAX_SCAN_CODEPOINTS));
+        scanOverflowWarned_ = true;
+      }
+      continue;
+    }
+
+    scanLookup_[slot] = scanCodepointCount_ + 1;
+    scanCodepoints_[scanCodepointCount_++] = packed;
+    scanGroupCounts_[group]++;
+  }
+  return nullptr;
+}
+
+void FontCacheManager::recordNonEmptyText(const char* text, int fontId, EpdFontFamily::Style style) {
   uint8_t fontSlot = scanFontCount_;
   for (uint8_t i = 0; i < scanFontCount_; i++) {
     if (scanFontIds_[i] == fontId) {
@@ -161,21 +227,26 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
   const uint8_t resolvedStyle = resolveScanStyle(fontId, style);
   const uint8_t group = fontSlot * 4 + resolvedStyle;
   const unsigned char* cursor = reinterpret_cast<const unsigned char*>(text);
+  const uint32_t packedGroup =
+      (static_cast<uint32_t>(fontSlot) << SCAN_FONT_SHIFT) | (static_cast<uint32_t>(resolvedStyle) << SCAN_STYLE_SHIFT);
+  if (scanCodepointCount_ >= SCAN_LOOKUP_THRESHOLD) {
+    if (scanLookup_ && !scanScratchFits(0)) scanLookup_.reset();
+    if (!scanLookupAttempted_ && scanMode_ == ScanMode::Scanning) buildScanLookup();
+    if (scanLookup_) {
+      cursor = recordIndexed(cursor, packedGroup, group);
+      if (!cursor) return;
+    }
+  }
+
+  uint32_t previousCodepoint = 0;
   while (*cursor) {
     const uint32_t codepoint = utf8NextCodepoint(&cursor);
-    if (codepoint == 0) break;
-
-    const uint32_t packed = (static_cast<uint32_t>(fontSlot) << SCAN_FONT_SHIFT) |
-                            (static_cast<uint32_t>(resolvedStyle) << SCAN_STYLE_SHIFT) | codepoint;
-    bool found = false;
-    for (uint16_t i = 0; i < scanCodepointCount_; i++) {
-      if (scanCodepoints_[i] == packed) {
-        found = true;
-        break;
-      }
-    }
-    if (found) continue;
-
+    if (codepoint == 0) return;
+    if (codepoint == previousCodepoint) continue;
+    previousCodepoint = codepoint;
+    const uint32_t packed = packedGroup | codepoint;
+    auto* const end = scanCodepoints_ + scanCodepointCount_;
+    if (std::find(scanCodepoints_, end, packed) != end) continue;
     if (scanCodepointCount_ >= MAX_SCAN_CODEPOINTS) {
       if (!scanOverflowWarned_) {
         LOG_DBG("FCM", "Scan codepoint cap (%u) reached; excess glyphs will load on demand",
@@ -184,15 +255,24 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
       }
       continue;
     }
-
-    scanCodepoints_[scanCodepointCount_++] = packed;
+    const uint16_t index = scanCodepointCount_++;
+    scanCodepoints_[index] = packed;
     scanGroupCounts_[group]++;
+    if (index == SCAN_LOOKUP_THRESHOLD - 1 && !scanLookupAttempted_ && scanMode_ == ScanMode::Scanning && *cursor) {
+      buildScanLookup();
+      if (scanLookup_) {
+        cursor = recordIndexed(cursor, packedGroup, group);
+        if (!cursor) return;
+      }
+    }
   }
 }
 
 // --- PrewarmScope implementation ---
 
 FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager) : manager_(&manager) {
+  manager_->scanLookup_.reset();
+  manager_->scanLookupAttempted_ = false;
   manager_->scanMode_ = ScanMode::Scanning;
   manager_->releaseScopeCache();
   manager_->resetStats();
@@ -203,6 +283,8 @@ FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager) : manage
 }
 
 void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
+  if (!active_) return;
+  manager_->scanLookup_.reset();
   manager_->scanMode_ = ScanMode::None;
   if (manager_->scanCodepointCount_ == 0) return;
 
