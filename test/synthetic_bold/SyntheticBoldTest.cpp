@@ -401,3 +401,70 @@ TEST_F(SyntheticBoldTest, RetainedBitmapsAreReleasedForFontRemovalAndFramebuffer
   EXPECT_GT(decompressor.getStats().pageBufferBytes, 0u);
   renderer.setFontCacheManager(nullptr);
 }
+
+namespace {
+void expectRowAlignedCompaction(const bool prewarm) {
+  struct Case {
+    uint8_t width, height;
+    std::vector<uint8_t> aligned, packed;
+  };
+  const Case cases[] = {
+      {0, 3, {}, {}},
+      {3, 0, {}, {}},
+      {1, 1, {0xBF}, {0x80}},
+      {2, 1, {0x6F}, {0x60}},
+      {3, 1, {0x9F}, {0x9C}},
+      {1, 3, {0xFF, 0x7F, 0xBF}, {0xD8}},
+      {2, 3, {0x1F, 0xBF, 0x4F}, {0x1B, 0x40}},
+      {3, 3, {0x1B, 0xE7, 0x4B}, {0x1B, 0x94, 0x80}},
+      {4, 3, {0xE4, 0x1B, 0x93}, {0xE4, 0x1B, 0x93}},
+      {5, 2, {0xE4, 0xFF, 0x1B, 0x7F}, {0xE4, 0xC6, 0xD0}},
+      {6, 2, {0xE4, 0x6F, 0x1B, 0xBF}, {0xE4, 0x61, 0xBB}},
+      {7, 2, {0xE4, 0x6F, 0x1B, 0xBB}, {0xE4, 0x6C, 0x6E, 0xE0}},
+      {1, 4, {0xFF, 0x7F, 0xBF, 0x3F}, {0xD8}},
+  };
+  for (const auto& c : cases) {
+    SCOPED_TRACE(testing::Message() << static_cast<int>(c.width) << "x" << static_cast<int>(c.height));
+    // One raw DEFLATE stored block; B also checks the following glyph's offset.
+    const auto size = static_cast<uint16_t>(c.aligned.size() + 1);
+    std::vector<uint8_t> compressed{0x01, static_cast<uint8_t>(size), static_cast<uint8_t>(size >> 8),
+                                    static_cast<uint8_t>(size ^ 0xFFu), static_cast<uint8_t>((size ^ 0xFFFFu) >> 8)};
+    compressed.reserve(size + 5);
+    compressed.insert(compressed.end(), c.aligned.begin(), c.aligned.end());
+    compressed.push_back(0x6C);
+    const EpdGlyph glyphs[] = {
+        {c.width, c.height, 16, 0, 0, static_cast<uint16_t>(c.packed.size()), 0},
+        {4, 1, 64, 0, 0, 1, static_cast<uint32_t>(c.packed.size())},
+    };
+    const EpdFontGroup group{0, static_cast<uint32_t>(compressed.size()), size, 2, 0};
+    const EpdUnicodeInterval interval{'A', 'B', 0};
+    EpdFontData font{};
+    font.bitmap = compressed.data();
+    font.glyph = glyphs;
+    font.intervals = &interval;
+    font.intervalCount = 1;
+    font.groups = &group;
+    font.groupCount = 1;
+    font.is2Bit = true;
+    FontDecompressor decompressor;
+    if (prewarm) ASSERT_EQ(decompressor.prewarmCache(&font, "AB"), 0);
+    for (int pass = 0; pass < 2; ++pass) {
+      const auto* a = decompressor.getBitmap(&font, &glyphs[0], 0);
+      if (!c.packed.empty()) {
+        ASSERT_NE(a, nullptr);
+        EXPECT_TRUE(std::equal(c.packed.begin(), c.packed.end(), a));
+      }
+      const auto* b = decompressor.getBitmap(&font, &glyphs[1], 1);
+      ASSERT_NE(b, nullptr);
+      EXPECT_EQ(*b, 0x6C);
+    }
+    if (prewarm) EXPECT_EQ(decompressor.getStats().cacheMisses, 0u);
+  }
+}
+}  // namespace
+
+TEST_F(SyntheticBoldTest, RowAlignedFallbackDiscardsPaddingAndPreservesFollowingGlyph) {
+  expectRowAlignedCompaction(false);
+}
+
+TEST_F(SyntheticBoldTest, RowAlignedPrewarmMatchesPackedBytesAcrossRowBoundaries) { expectRowAlignedCompaction(true); }

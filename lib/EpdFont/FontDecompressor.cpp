@@ -159,20 +159,24 @@ void FontDecompressor::compactSingleGlyph(const uint8_t* alignedSrc, uint8_t* pa
     memcpy(packedDst, alignedSrc, rowStride * height);
     return;
   }
-  uint8_t outByte = 0, outBits = 0;
-  uint32_t writeIdx = 0;
+  uint32_t accumulator = 0, heldBits = 0, writeIdx = 0;
   for (uint8_t y = 0; y < height; y++) {
-    for (uint8_t x = 0; x < width; x++) {
-      outByte = (outByte << 2) | ((alignedSrc[y * rowStride + x / 4] >> ((3 - (x % 4)) * 2)) & 0x3);
-      outBits += 2;
-      if (outBits == 8) {
-        packedDst[writeIdx++] = outByte;
-        outByte = 0;
-        outBits = 0;
+    const uint8_t* row = &alignedSrc[y * rowStride];
+    uint32_t remainingBits = 2u * width;
+    while (remainingBits > 0) {
+      const uint32_t chunkBits = remainingBits < 8 ? remainingBits : 8;
+      // At most 6 held bits + 8 input bits; discard each row's low padding bits.
+      accumulator = (accumulator << chunkBits) | (static_cast<uint32_t>(*row++) >> (8 - chunkBits));
+      heldBits += chunkBits;
+      remainingBits -= chunkBits;
+      if (heldBits >= 8) {
+        heldBits -= 8;
+        packedDst[writeIdx++] = static_cast<uint8_t>(accumulator >> heldBits);
+        accumulator &= (1u << heldBits) - 1;
       }
     }
   }
-  if (outBits > 0) packedDst[writeIdx] = outByte << (8 - outBits);
+  if (heldBits > 0) packedDst[writeIdx] = static_cast<uint8_t>(accumulator << (8 - heldBits));
 }
 
 // --- getBitmap: page buffer → hot group → decompress ---
