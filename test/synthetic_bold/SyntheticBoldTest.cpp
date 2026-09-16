@@ -401,3 +401,170 @@ TEST_F(SyntheticBoldTest, RetainedBitmapsAreReleasedForFontRemovalAndFramebuffer
   EXPECT_GT(decompressor.getStats().pageBufferBytes, 0u);
   renderer.setFontCacheManager(nullptr);
 }
+
+TEST_F(SyntheticBoldTest, DualGrayTextMatchesBothLegacyPlanesAcrossPrimitiveGroups) {
+  struct Group {
+    const char* text;
+    Style extra;
+    bool rotated, gray;
+    uint8_t width, height;
+  };
+  const Group groups[] = {{"ABC", R, false, true, 27, 29},
+                          {"A\xCC\x81 B? ", R, false, true, 3, 2},
+                          {"AB", EpdFontFamily::SUP, false, true, 7, 9},
+                          {"AB", EpdFontFamily::SUB, false, true, 9, 7},
+                          {"ABC", R, true, true, 13, 11},
+                          {"ABC", R, false, false, 17, 5}};
+  uint32_t seed = 0xC1002026;
+  for (bool x3 : {false, true}) {
+    panel.width = x3 ? 792 : 800;
+    panel.height = x3 ? 528 : 480;
+    panel.stride = panel.width / 8;
+    renderer.begin();
+    const size_t size = renderer.getBufferSize();
+    for (const auto& group : groups) {
+      std::vector<uint8_t> bitmap(std::max<size_t>(1, (group.width * group.height * (group.gray ? 2 : 1) + 7) / 8));
+      for (auto& byte : bitmap) {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        byte = seed;
+      }
+      if (group.gray && group.width == 3 && group.height == 2)
+        std::copy(std::begin(GRAY), std::end(GRAY), bitmap.begin());
+      auto glyphs = std::to_array(GLYPHS);
+      for (size_t i = 1; i < 4; ++i) {
+        glyphs[i].width = group.width;
+        glyphs[i].height = group.height;
+        glyphs[i].top = group.height;
+        glyphs[i].advanceX = (group.width + 1) * 16;
+        glyphs[i].dataLength = bitmap.size();
+      }
+      EpdFontData d = data(group.gray);
+      d.bitmap = bitmap.data();
+      d.glyph = glyphs.data();
+      d.ascender = group.height;
+      EpdFont font(&d);
+      renderer.insertFont(5, EpdFontFamily(&font));
+      for (int o = 0; o < 4; ++o) {
+        renderer.setOrientation(static_cast<GfxRenderer::Orientation>(o));
+        for (bool bold : {false, true}) {
+          for (bool black : {false, true}) {
+            for (uint8_t fill : {0x00, 0xA5}) {
+              SCOPED_TRACE(testing::Message() << x3 << ':' << group.text << ':' << int(group.extra) << ':' << o << ':'
+                                              << bold << ':' << black << ':' << int(fill));
+              const auto style = static_cast<Style>((bold ? B : R) | group.extra);
+              const auto draw = [&]() {
+                const int points[][2] = {
+                    {-2, -3}, {0, 0}, {17, 43}, {renderer.getScreenWidth() - 16, renderer.getScreenHeight() - 17}};
+                for (const auto& point : points) {
+                  if (group.rotated)
+                    renderer.drawTextRotated90CW(5, point[0], point[1], group.text, black, style);
+                  else
+                    renderer.drawText(5, point[0], point[1], group.text, black, style);
+                }
+                renderer.drawText(5, 18, 43, "AB", black, R);
+                renderer.drawText(5, 0, 0, "");
+                renderer.drawText(5, 0, 0, nullptr);
+                renderer.drawLine(17, 44, 80, 44, 2, true);
+                renderer.drawLine(23, 46, 55, 46, false);
+              };
+              const auto legacy = [&](uint8_t* l, uint8_t* m) {
+                for (int p = 0; p < 2; ++p) {
+                  renderer.setRenderMode(p ? GfxRenderer::GRAYSCALE_MSB : GfxRenderer::GRAYSCALE_LSB);
+                  renderer.beginStripTarget(p ? m : l, 0, panel.height);
+                  renderer.clearScreen(fill);
+                  draw();
+                  renderer.endStripTarget();
+                }
+                renderer.setRenderMode(GfxRenderer::BW);
+              };
+              std::vector<uint8_t> l(size + 32, 0x5A), m(l), expectedL(l), expectedM(l);
+              panel.pixels.fill(0xA5);
+              const auto bw = panel.pixels;
+              legacy(expectedL.data() + 16, expectedM.data() + 16);
+              bool active;
+              {
+                GfxRenderer::DualGrayTextScope scope(renderer, l.data() + 16, m.data() + 16, size);
+                active = scope.active();
+                EXPECT_EQ(active, o == GfxRenderer::Portrait || o == GfxRenderer::PortraitInverted);
+                if (active) {
+                  renderer.clearScreen(fill);
+                  draw();
+                }
+              }
+              if (!active) legacy(l.data() + 16, m.data() + 16);
+              EXPECT_EQ(l, expectedL);
+              EXPECT_EQ(m, expectedM);
+              EXPECT_EQ(panel.pixels, bw);
+              EXPECT_EQ(renderer.getRenderMode(), GfxRenderer::BW);
+              EXPECT_EQ(renderer.getWriteTarget(), panel.getFrameBuffer());
+              EXPECT_EQ(renderer.getWriteOriginY(), 0);
+              EXPECT_EQ(renderer.getWriteRows(), panel.height);
+            }
+          }
+        }
+      }
+      renderer.removeFont(5);
+    }
+  }
+}
+
+TEST_F(SyntheticBoldTest, DualGrayScopeRejectsUnavailableTargetsAndRestoresAfterEarlyReturn) {
+  const size_t size = renderer.getBufferSize();
+  std::vector<uint8_t> l(size + 1, 0xA5), m(size, 0x5A);
+  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+  for (int planes : {0, 1, 2}) {
+    for (size_t capacity : {size - 1, size}) {
+      GfxRenderer::DualGrayTextScope scope(renderer, planes ? l.data() : nullptr, planes == 2 ? m.data() : nullptr,
+                                           capacity);
+      EXPECT_EQ(scope.active(), planes == 2 && capacity == size);
+    }
+    EXPECT_EQ(renderer.getRenderMode(), GfxRenderer::GRAYSCALE_MSB);
+    EXPECT_EQ(renderer.getWriteTarget(), panel.getFrameBuffer());
+  }
+  for (uint8_t* other : {l.data(), l.data() + 1, panel.getFrameBuffer()}) {
+    GfxRenderer::DualGrayTextScope scope(renderer, l.data(), other, size);
+    EXPECT_FALSE(scope.active());
+  }
+  renderer.beginStripTarget(l.data(), 7, 1);
+  {
+    GfxRenderer::DualGrayTextScope scope(renderer, l.data(), m.data(), size);
+    EXPECT_FALSE(scope.active());
+  }
+  EXPECT_EQ(renderer.getWriteTarget(), l.data());
+  EXPECT_EQ(renderer.getWriteOriginY(), 7);
+  EXPECT_EQ(renderer.getWriteRows(), 1);
+  renderer.endStripTarget();
+  {
+    GfxRenderer::FrameBufferLoan loan(renderer);
+    GfxRenderer::DualGrayTextScope scope(renderer, l.data(), m.data(), size);
+    EXPECT_FALSE(scope.active());
+  }
+  FontCacheManager cache(renderer.getFontMap(), renderer.getSdCardFonts());
+  renderer.setFontCacheManager(&cache);
+  {
+    auto scan = cache.createPrewarmScope();
+    GfxRenderer::DualGrayTextScope scope(renderer, l.data(), m.data(), size);
+    EXPECT_FALSE(scope.active());
+  }
+  renderer.setFontCacheManager(nullptr);
+  const auto earlyReturn = [&]() {
+    GfxRenderer::DualGrayTextScope scope(renderer, l.data(), m.data(), size);
+    ASSERT_TRUE(scope.active());
+    GfxRenderer::DualGrayTextScope nested(renderer, l.data(), m.data(), size);
+    EXPECT_FALSE(nested.active());
+    renderer.drawText(1, 10, 20, "AB", true, B);
+    return;
+  };
+  earlyReturn();
+  EXPECT_EQ(renderer.getRenderMode(), GfxRenderer::GRAYSCALE_MSB);
+  EXPECT_EQ(renderer.getWriteTarget(), panel.getFrameBuffer());
+  EXPECT_EQ(renderer.getWriteOriginY(), 0);
+  EXPECT_EQ(renderer.getWriteRows(), panel.height);
+  const auto savedL = l, savedM = m;
+  renderer.drawPixel(10, 20);
+  renderer.clearScreen();
+  EXPECT_EQ(l, savedL);
+  EXPECT_EQ(m, savedM);
+}

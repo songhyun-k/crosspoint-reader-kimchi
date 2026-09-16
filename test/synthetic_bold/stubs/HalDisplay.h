@@ -14,7 +14,7 @@ class HalDisplay {
   static constexpr uint16_t DISPLAY_HEIGHT = 480;
   static constexpr uint16_t DISPLAY_WIDTH_BYTES = DISPLAY_WIDTH / 8;
   static constexpr uint32_t BUFFER_SIZE = DISPLAY_WIDTH_BYTES * DISPLAY_HEIGHT;
-  mutable std::array<uint8_t, BUFFER_SIZE> pixels{};
+  mutable std::array<uint8_t, 60000> pixels{};
   bool inverted = false;
   uint16_t width = DISPLAY_WIDTH, height = DISPLAY_HEIGHT, stride = DISPLAY_WIDTH_BYTES;
 
