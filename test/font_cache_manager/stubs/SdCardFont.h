@@ -6,7 +6,7 @@
 class SdCardFont {
  public:
   struct PrewarmCall {
-    char text[32] = {};
+    char text[2049] = {};
     uint8_t styleMask = 0;
   };
 

@@ -1,8 +1,13 @@
+#include <Arduino.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <map>
 #include <new>
+#include <string>
+#include <vector>
 
 #include "FontCacheManager.h"
 #include "FontDecompressor.h"
@@ -12,6 +17,22 @@ namespace {
 
 bool countHeapAllocations = false;
 size_t heapAllocationCount = 0;
+bool failScanAllocation = false;
+size_t scanAllocationAttempts = 0;
+void* scanScratch = nullptr;
+
+std::string encodeCodepoint(uint32_t cp) {
+  std::string text;
+  if (cp < 0x80)
+    text += static_cast<char>(cp);
+  else {
+    if (cp >= 0x10000) text += static_cast<char>(0xF0 | (cp >> 18));
+    if (cp >= 0x800) text += static_cast<char>((cp >= 0x10000 ? 0x80 : 0xE0) | ((cp >> 12) & 0x3F));
+    text += static_cast<char>((cp >= 0x800 ? 0x80 : 0xC0) | ((cp >> 6) & 0x3F));
+    text += static_cast<char>(0x80 | (cp & 0x3F));
+  }
+  return text;
+}
 
 const SdCardFont::PrewarmCall* findCall(const SdCardFont& font, const uint8_t styleMask) {
   for (int i = 0; i < font.prewarmCallCount; i++) {
@@ -31,6 +52,20 @@ void* operator new(const size_t size) {
 void operator delete(void* allocation) noexcept { std::free(allocation); }
 
 void operator delete(void* allocation, size_t) noexcept { std::free(allocation); }
+
+void* operator new[](size_t size) { return ::operator new(size); }
+void* operator new[](size_t size, const std::nothrow_t&) noexcept {
+  ++scanAllocationAttempts;
+  if (failScanAllocation) return nullptr;
+  if (countHeapAllocations) ++heapAllocationCount;
+  scanScratch = std::malloc(size);
+  return scanScratch;
+}
+void operator delete[](void* allocation) noexcept {
+  if (allocation == scanScratch) scanScratch = nullptr;
+  ::operator delete(allocation);
+}
+void operator delete[](void* allocation, size_t) noexcept { ::operator delete[](allocation); }
 
 TEST(FontCacheManagerTest, PrewarmScopeBatchesEachFontAndResolvedStyleSeparately) {
   SdCardFont readerFont;
@@ -148,4 +183,116 @@ TEST(FontCacheManagerTest, ScopeCleanupIsDistinctFromExplicitClear) {
   EXPECT_EQ(1, decompressor.clearCount);
   manager.releaseSdFontCaches();
   EXPECT_EQ(2, decompressor.clearCount);
+}
+
+TEST(FontCacheManagerTest, CollisionAndCapAdmissionMatchAcrossGroupsAndFallbacks) {
+  std::vector<uint32_t> keys;
+  keys.reserve(700);
+  for (uint32_t cp = 1; cp <= 0x10FFFF && keys.size() < 700; ++cp) {
+    if ((cp < 0xD800 || cp > 0xDFFF) && (cp * 2654435761u) >> 22 == 11) keys.push_back(cp);
+  }
+  ASSERT_EQ(keys.size(), 700u);
+  for (int mode : {0, 1, 2}) {
+    for (size_t count : {0u, 63u, 64u, 65u, 512u, 513u, 700u}) {
+      std::array<SdCardFont, 2> fonts;
+      const std::map<int, EpdFontFamily> builtin;
+      const std::map<int, SdCardFont*> sd{{7, &fonts[0]}, {11, &fonts[1]}};
+      FontCacheManager cache(builtin, sd);
+      std::array<std::vector<uint32_t>, 4> expected;
+      for (auto& group : expected) group.reserve(512);
+      failScanAllocation = mode == 1;
+      ESP.freeHeap = mode == 2 ? 32 * 1024 : 1024 * 1024;
+      scanAllocationAttempts = 0;
+      {
+        auto scope = cache.createPrewarmScope();
+        for (size_t i = 0; i < count * 2; ++i) {
+          const size_t key = i % count;
+          const unsigned group = key % 4;
+          const std::string text = encodeCodepoint(keys[key]);
+          cache.recordText(text.c_str(), group / 2 ? 11 : 7, static_cast<EpdFontFamily::Style>(group % 2));
+          if (i < 512 && i < count) expected[group].push_back(keys[key]);
+        }
+      }
+      failScanAllocation = false;
+      ESP.freeHeap = 1024 * 1024;
+      EXPECT_EQ(scanScratch, nullptr);
+      EXPECT_EQ(scanAllocationAttempts, count >= 64 && mode != 2 ? 1u : 0u);
+      for (unsigned f = 0; f < fonts.size(); ++f) {
+        int groups = 0;
+        for (unsigned style = 0; style < 2; ++style) {
+          auto& values = expected[f * 2 + style];
+          std::sort(values.begin(), values.end());
+          std::string text;
+          for (uint32_t cp : values) text += encodeCodepoint(cp);
+          const auto* call = findCall(fonts[f], 1 << style);
+          if (text.empty())
+            EXPECT_EQ(call, nullptr);
+          else {
+            ASSERT_NE(call, nullptr);
+            EXPECT_EQ(text, call->text);
+            ++groups;
+          }
+        }
+        EXPECT_EQ(fonts[f].prewarmCallCount, groups);
+      }
+    }
+  }
+}
+
+TEST(FontCacheManagerTest, ScanScratchEndsBeforePrewarmAndMovesWithTheScope) {
+  SdCardFont font;
+  const std::map<int, EpdFontFamily> builtin;
+  const std::map<int, SdCardFont*> sd{{7, &font}};
+  FontCacheManager cache(builtin, sd);
+  std::string text;
+  for (uint32_t cp = 0xAC00; cp < 0xAC00 + 80; ++cp) text += encodeCodepoint(cp);
+  for (bool explicitEnd : {false, true}) {
+    font.prewarmCallCount = 0;
+    {
+      auto scope = cache.createPrewarmScope();
+      cache.recordText(text.c_str(), 7, EpdFontFamily::REGULAR);
+      EXPECT_NE(scanScratch, nullptr);
+      auto moved = std::move(scope);
+      scope.endScanAndPrewarm();
+      EXPECT_TRUE(cache.isScanning());
+      if (explicitEnd) {
+        moved.endScanAndPrewarm();
+        EXPECT_EQ(scanScratch, nullptr);
+        moved.endScanAndPrewarm();
+      }
+    }
+    EXPECT_EQ(scanScratch, nullptr);
+    EXPECT_EQ(font.prewarmCallCount, 1);
+    EXPECT_EQ(text, font.prewarmCalls[0].text);
+    auto empty = cache.createPrewarmScope();
+    empty.endScanAndPrewarm();
+    EXPECT_EQ(font.prewarmCallCount, 1);
+  }
+}
+
+TEST(FontCacheManagerTest, MemoryPressureDropsScratchWithoutRetryOrLostAdmission) {
+  for (bool fragmented : {false, true}) {
+    SdCardFont font;
+    const std::map<int, EpdFontFamily> builtin;
+    const std::map<int, SdCardFont*> sd{{7, &font}};
+    FontCacheManager cache(builtin, sd);
+    std::string text;
+    for (uint32_t cp = 0xAC00; cp < 0xAC00 + 80; ++cp) text += encodeCodepoint(cp);
+    auto scope = cache.createPrewarmScope();
+    scanAllocationAttempts = 0;
+    cache.recordText(text.c_str(), 7, EpdFontFamily::REGULAR);
+    EXPECT_NE(scanScratch, nullptr);
+    if (fragmented)
+      ESP.maxAlloc = 8 * 1024;
+    else
+      ESP.freeHeap = 32 * 1024;
+    cache.recordText(text.c_str(), 7, EpdFontFamily::REGULAR);
+    EXPECT_EQ(scanScratch, nullptr);
+    ESP.freeHeap = ESP.maxAlloc = 1024 * 1024;
+    cache.recordText("A", 7, EpdFontFamily::REGULAR);
+    scope.endScanAndPrewarm();
+    EXPECT_EQ(scanAllocationAttempts, 1u);
+    ASSERT_EQ(font.prewarmCallCount, 1);
+    EXPECT_EQ("A" + text, font.prewarmCalls[0].text);
+  }
 }

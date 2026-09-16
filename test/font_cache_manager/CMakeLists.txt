@@ -6,6 +6,9 @@ add_executable(FontCacheManagerTest
 
 target_include_directories(FontCacheManagerTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+  ${REPO_ROOT}/test/synthetic_bold/stubs
+  ${REPO_ROOT}/test/xtc_memory/stubs
+  ${REPO_ROOT}/lib/Memory
   ${REPO_ROOT}/lib/GfxRenderer
   ${REPO_ROOT}/lib/Utf8
 )
