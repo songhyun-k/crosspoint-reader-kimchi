@@ -71,6 +71,8 @@ class HalGPIO {
 
   // Button input methods
   void update();
+  // Raw changes still awaiting the SDK debounce; this is not a button event.
+  bool isDebouncePending() const;
   bool isPressed(uint8_t buttonIndex) const;
   bool wasPressed(uint8_t buttonIndex) const;
   bool wasAnyPressed() const;

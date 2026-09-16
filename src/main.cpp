@@ -590,7 +590,7 @@ void loop() {
       // No host is active, so a slower loop is safe. The activity itself times
       // out the raw-storage handoff rather than entering deep sleep detached.
       powerManager.setPowerSaving(true);
-      delay(50);
+      delay(gpio.isDebouncePending() ? 10 : 50);
     }
     return;
   }
@@ -751,7 +751,7 @@ void loop() {
 
   // Add delay at the end of the loop to prevent tight spinning
   // When an activity requests skip loop delay (e.g., webserver running), use yield() for faster response
-  // Otherwise, use longer delay to save power
+  // Otherwise, use longer delay to save power, unless a raw change still needs debounce.
   if (activityManager.skipLoopDelay()) {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
@@ -759,7 +759,7 @@ void loop() {
     if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
       // If we've been inactive for a while, increase the delay to save power
       powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
-      delay(50);
+      delay(gpio.isDebouncePending() ? 10 : 50);
     } else {
       // Short delay to prevent tight loop while still being responsive
       delay(10);

@@ -314,23 +314,24 @@ void EpubReaderActivity::openDictionaryWordSelect() {
                          [this](const ActivityResult&) { requestUpdate(); });
 }
 
-void EpubReaderActivity::loop() {
-  if (!epub) {
-    finish();
-    return;
+bool EpubReaderActivity::hasInputActivity() const {
+  // Read the current input frame without consuming another event. Held buttons
+  // also take priority: their long-press action may not have an edge this tick.
+  if (gpio.isDebouncePending() || mappedInput.wasAnyPressed() || mappedInput.wasAnyReleased() ||
+      gpio.wasTouchActivity()) {
+    return true;
   }
+  for (uint8_t button = HalGPIO::BTN_BACK; button <= HalGPIO::BTN_POWER; ++button) {
+    if (gpio.isPressed(button)) return true;
+  }
+  return false;
+}
 
-  // Someone else turned the screen while this reader was stacked (the control
-  // center's orientation tile). Reflow before the next render, or the page
-  // would be drawn with a layout built for the previous frame size.
-  if (appliedOrientation != SETTINGS.orientation) {
-    applyOrientation(SETTINGS.orientation);
-    requestUpdate();
-    return;
-  }
+void EpubReaderActivity::runBackgroundWork() {
+  const bool allowSpeculativeWork = !hasInputActivity();
 
   constexpr unsigned long IDLE_PREWARM_DEBOUNCE_MS = 400;
-  if (section && !section->isBuilding() && !RenderLock::peek() && renderer.hasFrameBuffer() &&
+  if (allowSpeculativeWork && section && !section->isBuilding() && !RenderLock::peek() && renderer.hasFrameBuffer() &&
       lastRenderCompleteMs != 0 && millis() - lastRenderCompleteMs > IDLE_PREWARM_DEBOUNCE_MS &&
       ESP.getFreeHeap() > RENDER_MIN_FREE_HEAP && ESP.getMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
       (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
@@ -354,7 +355,8 @@ void EpubReaderActivity::loop() {
     }
   }
 
-  if (section && !section->isBuilding() && section->isPartial() && !RenderLock::peek() && buildViewportWidth > 0 &&
+  if (section && (allowSpeculativeWork || section->currentPage >= static_cast<int>(section->pageCount)) &&
+      !section->isBuilding() && section->isPartial() && !RenderLock::peek() && buildViewportWidth > 0 &&
       !partialRebuildStartFailed &&
       section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
     RenderLock lock;
@@ -368,7 +370,8 @@ void EpubReaderActivity::loop() {
     }
   }
 
-  if (section && section->isBuilding() && !RenderLock::peek() &&
+  if (section && (allowSpeculativeWork || section->currentPage >= static_cast<int>(section->pageCount)) &&
+      section->isBuilding() && !RenderLock::peek() &&
       (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD) &&
       buildTickHeapGate()) {
     RenderLock lock;
@@ -381,6 +384,22 @@ void EpubReaderActivity::loop() {
         requestUpdate();
       }
     }
+  }
+}
+
+void EpubReaderActivity::loop() {
+  if (!epub) {
+    finish();
+    return;
+  }
+
+  // Someone else turned the screen while this reader was stacked (the control
+  // center's orientation tile). Reflow before the next render, or the page
+  // would be drawn with a layout built for the previous frame size.
+  if (appliedOrientation != SETTINGS.orientation) {
+    applyOrientation(SETTINGS.orientation);
+    requestUpdate();
+    return;
   }
 
   const bool atEndOfBook = currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount();
@@ -545,7 +564,8 @@ void EpubReaderActivity::loop() {
     }
   }
 
-  if (confirmReleased || ReaderUtils::isTouchMenuGesture(renderer, mappedInput)) {
+  const bool menuTriggered = confirmReleased || ReaderUtils::isTouchMenuGesture(renderer, mappedInput);
+  if (menuTriggered) {
     // Toolbar style: the page is on screen and in the framebuffer, so paint the
     // toolbar over it (one refresh) instead of pushing a full-screen menu.
     if (usesToolbarMenu() && section) {
@@ -607,6 +627,11 @@ void EpubReaderActivity::loop() {
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) {
+    // Input and transitions above own this tick. Do not work on the old page
+    // after opening a menu, handling a hold, or queuing a guarded page turn.
+    if (!confirmLongPressed && !menuTriggered && pendingManualTurn == 0) {
+      runBackgroundWork();
+    }
     return;
   }
 
@@ -1095,7 +1120,10 @@ void EpubReaderActivity::onReturnFromEndOfBook() {
 }
 
 bool EpubReaderActivity::skipLoopDelay() {
+  // A deferred optional build must not keep the input loop spinning. Work for
+  // a missing visible page still uses the existing no-delay path.
   return section && section->isBuilding() && !buildHeapPaused &&
+         (section->currentPage >= static_cast<int>(section->pageCount) || !hasInputActivity()) &&
          (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD);
 }
 

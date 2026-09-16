@@ -146,6 +146,8 @@ void HalGPIO::update() {
   lastUsbConnected = connected;
 }
 
+bool HalGPIO::isDebouncePending() const { return inputMgr.isDebouncePending(); }
+
 bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
 
 bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }
