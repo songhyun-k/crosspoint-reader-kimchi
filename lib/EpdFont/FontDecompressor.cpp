@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <Utf8.h>
 
 #include <cstdlib>
@@ -59,11 +60,21 @@ uint16_t FontDecompressor::getGroupIndex(const EpdFontData* fontData, uint32_t g
     return fontData->glyphToGroup[glyphIndex];
   }
 
-  // Contiguous-group fonts: linear scan
-  for (uint16_t i = 0; i < fontData->groupCount; i++) {
-    uint32_t first = fontData->groups[i].firstGlyphIndex;
-    if (glyphIndex >= first && glyphIndex < first + fontData->groups[i].glyphCount) {
-      return i;
+  // Find the last contiguous group starting at or before this glyph.
+  uint16_t left = 0, right = fontData->groupCount;
+  while (left < right) {
+    const uint16_t mid = left + (right - left) / 2;
+    if (fontData->groups[mid].firstGlyphIndex <= glyphIndex) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+  if (left > 0) {
+    const uint16_t groupIndex = left - 1;
+    const EpdFontGroup& group = fontData->groups[groupIndex];
+    if (glyphIndex - group.firstGlyphIndex < group.glyphCount) {
+      return groupIndex;
     }
   }
   return fontData->groupCount;  // sentinel = not found
@@ -460,43 +471,58 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
     }
   }
 
-  // Step 4: For each unique group, decompress to temp buffer and extract needed glyphs
+  // Step 4: Reuse one request-owned scratch buffer for all needed groups.
   uint32_t writeOffset = 0;
   int missed = 0;
+  uint32_t maxTempBytes = 0;
+  for (uint8_t g = 0; g < groupCount; g++) {
+    const uint32_t groupBytes = fontData->groups[neededGroups[g]].uncompressedSize;
+    if (groupBytes > maxTempBytes) maxTempBytes = groupBytes;
+  }
+  auto tempBuf = makeUniqueNoThrow<uint8_t[]>(maxTempBytes);
+  if (!tempBuf) {
+    LOG_ERR("FDC", "Failed to allocate temp buffer (%u bytes)", maxTempBytes);
+    return groupCount;  // Entries remain unextracted for hot-group fallback.
+  }
+  if (maxTempBytes > stats.peakTempBytes) stats.peakTempBytes = maxTempBytes;
 
   for (uint8_t g = 0; g < groupCount; g++) {
     uint16_t groupIdx = neededGroups[g];
     const EpdFontGroup& group = fontData->groups[groupIdx];
 
-    auto* tempBuf = static_cast<uint8_t*>(malloc(group.uncompressedSize));
-    if (!tempBuf) {
-      LOG_ERR("FDC", "Failed to allocate temp buffer (%u bytes) for group %u", group.uncompressedSize, groupIdx);
-      missed++;
-      continue;
-    }
-    if (group.uncompressedSize > stats.peakTempBytes) {
-      stats.peakTempBytes = group.uncompressedSize;
-    }
-
-    if (!decompressGroup(fontData, groupIdx, tempBuf, group.uncompressedSize)) {
-      free(tempBuf);
+    if (!decompressGroup(fontData, groupIdx, tempBuf.get(), group.uncompressedSize)) {
       missed++;
       continue;
     }
 
     // Extract needed glyphs directly from the byte-aligned temp buffer, compacting on the fly.
     // alignedOffset was pre-computed in step 3b — no full-group compact scan needed.
-    for (uint16_t i = 0; i < slot.glyphCount; i++) {
-      if (slot.glyphs[i].bufferOffset != UINT32_MAX) continue;  // already extracted
-      if (getGroupIndex(fontData, slot.glyphs[i].glyphIndex) != groupIdx) continue;
-
+    auto extractGlyph = [&](uint16_t i) {
       const EpdGlyph& glyph = fontData->glyph[slot.glyphs[i].glyphIndex];
       compactSingleGlyph(&tempBuf[slot.glyphs[i].alignedOffset], &slot.buffer[writeOffset], glyph.width, glyph.height);
       slot.glyphs[i].bufferOffset = writeOffset;
       writeOffset += glyph.dataLength;
+    };
+    if (fontData->glyphToGroup) {
+      for (uint16_t i = 0; i < slot.glyphCount; i++) {
+        if (slot.glyphs[i].bufferOffset != UINT32_MAX) continue;  // already extracted
+        if (getGroupIndex(fontData, slot.glyphs[i].glyphIndex) != groupIdx) continue;
+        extractGlyph(i);
+      }
+    } else {
+      uint16_t firstNeeded = 0, end = slot.glyphCount;
+      while (firstNeeded < end) {
+        const uint16_t mid = firstNeeded + (end - firstNeeded) / 2;
+        if (slot.glyphs[mid].glyphIndex < group.firstGlyphIndex)
+          firstNeeded = mid + 1;
+        else
+          end = mid;
+      }
+      const uint32_t groupEnd = group.firstGlyphIndex + group.glyphCount;
+      for (uint16_t i = firstNeeded; i < slot.glyphCount && slot.glyphs[i].glyphIndex < groupEnd; i++) {
+        extractGlyph(i);
+      }
     }
-
-    free(tempBuf);
   }
 
   LOG_DBG("FDC", "Prewarm: %u glyphs in %u bytes from %u groups (%d missed)", glyphCount, writeOffset, groupCount,

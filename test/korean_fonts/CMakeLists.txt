@@ -22,7 +22,7 @@ target_include_directories(KoreanFontsTest PRIVATE
   ${REPO_ROOT}/test/xtc_memory/stubs
   ${CMAKE_BINARY_DIR}/i18n/generated
   ${REPO_ROOT}/src ${REPO_ROOT}/lib/I18n
-  ${REPO_ROOT}/lib/EpdFont ${REPO_ROOT}/lib/Utf8
+  ${REPO_ROOT}/lib/EpdFont ${REPO_ROOT}/lib/Utf8 ${REPO_ROOT}/lib/Memory
   ${REPO_ROOT}/lib/InflateReader ${REPO_ROOT}/lib/uzlib/src
 )
 target_link_libraries(KoreanFontsTest PRIVATE crosspoint_test_common GTest::gtest_main)
