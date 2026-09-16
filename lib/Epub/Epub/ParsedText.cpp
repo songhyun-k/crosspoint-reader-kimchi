@@ -158,35 +158,34 @@ bool hasCjkBreakOpportunityBetween(const uint32_t leftCp, const uint32_t rightCp
 }
 
 std::vector<size_t> cjkCharacterBreakByteOffsets(const std::string& text) {
-  struct CodepointBoundary {
-    uint32_t cp;
-    size_t endOffset;
-  };
-
-  std::vector<CodepointBoundary> codepoints;
-  codepoints.reserve(text.size());
-  bool hasCjkBreakable = false;
-
+  if (text.empty() || !containsCjkBreakableCodepoint(text)) return {};
   const auto* ptr = reinterpret_cast<const unsigned char*>(text.c_str());
   const auto* const start = ptr;
-  while (*ptr) {
-    const uint32_t cp = utf8NextCodepoint(&ptr);
-    if (cp == 0) break;
-    if (utf8IsCjkBreakable(cp)) {
-      hasCjkBreakable = true;
-    }
-    codepoints.push_back({cp, static_cast<size_t>(ptr - start)});
-  }
-
-  if (!hasCjkBreakable || codepoints.size() < 2) return {};
+  uint32_t previous = utf8NextCodepoint(&ptr);
+  uint32_t current;
+  size_t previousEnd;
+  do {
+    previousEnd = static_cast<size_t>(ptr - start);
+    current = utf8NextCodepoint(&ptr);
+    if (current == 0) return {};
+    if (hasCjkBreakOpportunityBetween(previous, current)) break;
+    previous = current;
+  } while (true);
 
   std::vector<size_t> allowedOffsets;
-  allowedOffsets.reserve(codepoints.size() - 1);
-  for (size_t i = 0; i + 1 < codepoints.size(); ++i) {
-    const uint32_t current = codepoints[i].cp;
-    const uint32_t next = codepoints[i + 1].cp;
-    if (!hasCjkBreakOpportunityBetween(current, next)) continue;
-    allowedOffsets.push_back(codepoints[i].endOffset);
+  // Every break touches a CJK codepoint (at least three UTF-8 bytes).
+  // Even alternating one-byte/CJK characters need at most one offset per two bytes.
+  allowedOffsets.reserve(text.size() / 2);
+  allowedOffsets.push_back(previousEnd);
+  previous = current;
+  while (*ptr) {
+    previousEnd = static_cast<size_t>(ptr - start);
+    current = utf8NextCodepoint(&ptr);
+    if (current == 0) break;
+    if (hasCjkBreakOpportunityBetween(previous, current)) {
+      allowedOffsets.push_back(previousEnd);
+    }
+    previous = current;
   }
   return allowedOffsets;
 }
