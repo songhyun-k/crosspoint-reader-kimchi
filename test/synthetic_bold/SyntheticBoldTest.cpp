@@ -447,7 +447,9 @@ void expectRowAlignedCompaction(const bool prewarm) {
     font.groupCount = 1;
     font.is2Bit = true;
     FontDecompressor decompressor;
-    if (prewarm) ASSERT_EQ(decompressor.prewarmCache(&font, "AB"), 0);
+    if (prewarm) {
+      ASSERT_EQ(decompressor.prewarmCache(&font, "AB"), 0);
+    }
     for (int pass = 0; pass < 2; ++pass) {
       const auto* a = decompressor.getBitmap(&font, &glyphs[0], 0);
       if (!c.packed.empty()) {
@@ -458,7 +460,9 @@ void expectRowAlignedCompaction(const bool prewarm) {
       ASSERT_NE(b, nullptr);
       EXPECT_EQ(*b, 0x6C);
     }
-    if (prewarm) EXPECT_EQ(decompressor.getStats().cacheMisses, 0u);
+    if (prewarm) {
+      EXPECT_EQ(decompressor.getStats().cacheMisses, 0u);
+    }
   }
 }
 }  // namespace
