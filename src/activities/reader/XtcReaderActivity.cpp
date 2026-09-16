@@ -175,7 +175,7 @@ void XtcReaderActivity::renderPage() {
     }
     const size_t planeSize = (static_cast<size_t>(pageWidth) * pageHeight + 7) / 8;
     const uint8_t* plane1 = pageBuffer.get();
-    const uint8_t* plane2 = pageBuffer.get() + planeSize;
+    const uint8_t* plane2 = plane1 + planeSize;
     const size_t colBytes = (pageHeight + 7) / 8;
 
     auto getPixelValue = [&](uint16_t x, uint16_t y) -> uint8_t {
