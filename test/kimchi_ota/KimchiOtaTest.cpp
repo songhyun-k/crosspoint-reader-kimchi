@@ -103,14 +103,13 @@ TEST_F(KimchiOtaTest, UsesKimchiLatestAndTheRealCompiledBoardTag) {
     OtaUpdater updater;
     ASSERT_EQ(updater.checkForUpdate(), OtaUpdater::OK);
     EXPECT_EQ(ota_test::lastUrl, kimchi_release::LATEST_URL);
-    EXPECT_EQ(updater.getLatestVersion(), "v1.6.0-kimchi.2");
+    EXPECT_EQ(updater.getLatestVersion(), TEST_LATEST_VERSION);
     EXPECT_EQ(updater.getOtaSize(), 256u);
     ASSERT_TRUE(updater.isUpdateNewer());
     EXPECT_EQ(updater.installUpdate(), OtaUpdater::OK);
     EXPECT_EQ(ota_test::lastUrl,
-              "https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/"
-              "v1.6.0-kimchi.2/" +
-                  expectedAsset());
+              std::string("https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/") +
+                  TEST_LATEST_VERSION + "/" + expectedAsset());
     EXPECT_EQ(updater.getProcessedSize(), 256u);
     EXPECT_EQ(ota_test::declaredSize, 256u);
   }
@@ -121,9 +120,10 @@ TEST_F(KimchiOtaTest, UsesKimchiLatestAndTheRealCompiledBoardTag) {
 
 TEST_F(KimchiOtaTest, EqualAndOlderReleasesAreNotInstallable) {
   const auto original = ota_test::json;
-  for (const char* tag : {"1.6.0-kimchi.1", "v1.6.0-kimchi.1", "v1.5.9-kimchi.9"}) {
+  for (const std::string& tag :
+       {std::string(TEST_CURRENT_VERSION), "v" + std::string(TEST_CURRENT_VERSION), std::string("0.0.0-kimchi.0")}) {
     ota_test::json = original;
-    replaceAll(ota_test::json, "v1.6.0-kimchi.2", tag);
+    replaceAll(ota_test::json, TEST_LATEST_VERSION, tag);
     OtaUpdater updater;
     EXPECT_EQ(updater.checkForUpdate(), OtaUpdater::NO_UPDATE);
     EXPECT_FALSE(updater.isUpdateNewer());
@@ -144,7 +144,7 @@ TEST_F(KimchiOtaTest, InvalidAndOverlongTagsAreRejected) {
   for (const char* tag :
        {"not-a-version", "1.6.0-kimchi.2oops", "sd-fonts-m1-b1", "2.0.0-kimchi.00000000000000000001oops"}) {
     ota_test::json = original;
-    replaceAll(ota_test::json, "v1.6.0-kimchi.2", tag);
+    replaceAll(ota_test::json, TEST_LATEST_VERSION, tag);
     OtaUpdater updater;
     EXPECT_EQ(updater.checkForUpdate(), OtaUpdater::JSON_PARSE_ERROR);
   }

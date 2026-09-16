@@ -1,0 +1,13 @@
+{
+  "tag_name": "@KIMCHI_TEST_LATEST_VERSION@",
+  "draft": false,
+  "prerelease": false,
+  "body": "Local test fixture only. These releases and assets are not published.",
+  "assets": [
+    {"name": "firmware-papermono.bin", "size": 256, "browser_download_url": "https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/@KIMCHI_TEST_LATEST_VERSION@/firmware-papermono.bin"},
+    {"name": "checksums.sha256", "size": 100, "browser_download_url": "https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/@KIMCHI_TEST_LATEST_VERSION@/checksums.sha256"},
+    {"name": "firmware-sticky.bin", "size": 256, "browser_download_url": "https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/@KIMCHI_TEST_LATEST_VERSION@/firmware-sticky.bin"},
+    {"name": "firmware.bin", "size": 256, "browser_download_url": "https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/@KIMCHI_TEST_LATEST_VERSION@/firmware.bin"},
+    {"name": "firmware-x4pro.bin", "size": 256, "browser_download_url": "https://github.com/songhyun-k/crosspoint-reader-kimchi/releases/download/@KIMCHI_TEST_LATEST_VERSION@/firmware-x4pro.bin"}
+  ]
+}
