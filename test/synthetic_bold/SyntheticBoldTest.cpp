@@ -257,3 +257,71 @@ TEST_F(SyntheticBoldTest, RegularOnlyBuiltInKoreanUsesSameDecompressedBitmapForB
   }
   renderer.setFontCacheManager(nullptr);
 }
+
+TEST_F(SyntheticBoldTest, PrewarmScopeReusesKoreanBitmapsAcrossStylesAndScopes) {
+  EpdFont body(&kimchi_batang_14_regular);
+  renderer.insertFont(6, EpdFontFamily(&body));
+  FontDecompressor decompressor;
+  FontCacheManager cache(renderer.getFontMap(), renderer.getSdCardFonts());
+  cache.setFontDecompressor(&decompressor);
+  renderer.setFontCacheManager(&cache);
+  {
+    auto scope = cache.createPrewarmScope();
+    renderer.drawText(6, 10, 10, "한글 본문", true, R);
+    renderer.drawText(6, 10, 50, "한글", true, B);
+    scope.endScanAndPrewarm();
+    EXPECT_GT(decompressor.getStats().pageBufferBytes, 0u);
+  }
+  const auto* glyph = body.getGlyph(0xD55C);
+  ASSERT_NE(glyph, nullptr);
+  const auto index = static_cast<uint32_t>(glyph - body.data->glyph);
+  const auto* bitmap = decompressor.getBitmap(body.data, glyph, index);
+  ASSERT_NE(bitmap, nullptr);
+  for (const char* text : {"한글 본문", "한글"}) {
+    auto scope = cache.createPrewarmScope();
+    renderer.drawText(6, 10, 10, text, true, BI);
+    scope.endScanAndPrewarm();
+    EXPECT_EQ(decompressor.getStats().pageBufferBytes, 0u);
+    EXPECT_EQ(decompressor.getStats().pageGlyphsBytes, 0u);
+    EXPECT_EQ(decompressor.getStats().peakTempBytes, 0u);
+    EXPECT_EQ(decompressor.getBitmap(body.data, glyph, index), bitmap);
+    for (auto mode : {GfxRenderer::BW, GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {
+      renderer.setRenderMode(mode);
+      renderer.clearScreen(mode == GfxRenderer::BW ? 0xFF : 0);
+      renderer.drawText(6, 10, 10, text, true, BI);
+    }
+    EXPECT_EQ(decompressor.getStats().cacheMisses, 0u);
+  }
+  cache.clearCache();
+  decompressor.resetStats();
+  EXPECT_EQ(decompressor.prewarmCache(body.data, "한글"), 0);
+  EXPECT_GT(decompressor.getStats().pageBufferBytes, 0u);
+  renderer.setFontCacheManager(nullptr);
+}
+
+TEST_F(SyntheticBoldTest, RetainedBitmapsAreReleasedForFontRemovalAndFramebufferLoan) {
+  EpdFont body(&kimchi_batang_14_regular);
+  renderer.insertFont(6, EpdFontFamily(&body));
+  FontDecompressor decompressor;
+  FontCacheManager cache(renderer.getFontMap(), renderer.getSdCardFonts());
+  cache.setFontDecompressor(&decompressor);
+  renderer.setFontCacheManager(&cache);
+  auto prewarm = [&] {
+    auto scope = cache.createPrewarmScope();
+    renderer.drawText(6, 10, 10, "한글", true, R);
+    scope.endScanAndPrewarm();
+  };
+  prewarm();
+  {
+    GfxRenderer::FrameBufferLoan loan(renderer);
+    EXPECT_FALSE(renderer.hasFrameBuffer());
+  }
+  EXPECT_TRUE(renderer.hasFrameBuffer());
+  prewarm();
+  EXPECT_GT(decompressor.getStats().pageBufferBytes, 0u);
+  renderer.removeFont(6);
+  renderer.insertFont(6, EpdFontFamily(&body));
+  prewarm();
+  EXPECT_GT(decompressor.getStats().pageBufferBytes, 0u);
+  renderer.setFontCacheManager(nullptr);
+}

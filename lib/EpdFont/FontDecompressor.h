@@ -22,6 +22,12 @@ class FontDecompressor {
   // Free all cached data (page buffer + hot group).
   void clearCache();
 
+  // Scope boundaries return fallback scratch, retaining page slots only with heap headroom.
+  void releaseTransientCache();
+  // Before a batch, discard slots for fonts it will not use. Requested slots are
+  // never evicted to make room for another font in the same batch.
+  void retainFonts(const EpdFontData* const* fonts, uint8_t count);
+
   // Pre-scan UTF-8 text and extract needed glyph bitmaps into a flat page buffer.
   // Each group is decompressed once into a temp buffer; only needed glyphs are kept.
   // Returns the number of glyphs that couldn't be loaded (0 on full success).
@@ -47,8 +53,8 @@ class FontDecompressor {
   Stats stats;
   InflateReader inflateReader;
 
-  // Page buffer slots: each style gets its own flat glyph buffer with sorted lookup.
-  // Up to MAX_PAGE_SLOTS (4) styles can be prewarmed simultaneously.
+  // One flat glyph buffer per distinct fontData, shared by style aliases.
+  // Only the current batch's fonts survive; glyph sets are replaced, not accumulated.
   struct PageGlyphEntry {
     uint32_t glyphIndex;
     uint32_t bufferOffset;
@@ -82,6 +88,8 @@ class FontDecompressor {
   // Grow (never shrink) an owned buffer to at least `needed` bytes; false on OOM, buffer freed.
   static bool ensureCapacity(uint8_t*& buf, uint32_t& capacity, uint32_t needed);
 
+  static const uint8_t* findPageBitmap(const PageSlot& slot, uint32_t glyphIndex);
+  void freePageSlot(uint8_t index);
   void freePageBuffer();
   void freeHotGroup();
   uint16_t getGroupIndex(const EpdFontData* fontData, uint32_t glyphIndex);

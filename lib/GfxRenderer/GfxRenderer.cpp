@@ -131,6 +131,7 @@ void GfxRenderer::begin() {
 }
 
 void GfxRenderer::releaseFrameBufferForBuild() {
+  if (fontCacheManager_) fontCacheManager_->clearCache();
   // Lend the framebuffer's bytes IN PLACE: the allocation is never freed, so
   // it cannot move and repeated loans cannot fragment the heap (the previous
   // free+realloc model measurably decayed the max contiguous block over a
@@ -172,6 +173,13 @@ void GfxRenderer::FrameBufferLoan::end() {
 }
 
 bool GfxRenderer::isFontCacheScanning() const { return fontCacheManager_ && fontCacheManager_->isScanning(); }
+
+void GfxRenderer::removeFont(int fontId) {
+  if (fontCacheManager_) fontCacheManager_->clearCache();
+  fontMap.erase(fontId);
+  sdCardFonts_.erase(fontId);
+  sdCardFontScales_.erase(fontId);
+}
 
 void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   auto result = fontMap.insert({fontId, font});

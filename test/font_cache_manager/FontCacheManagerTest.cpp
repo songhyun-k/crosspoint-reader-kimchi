@@ -129,3 +129,23 @@ TEST(FontCacheManagerTest, PrewarmScanDoesNotAllocateHeapMemory) {
 
   EXPECT_EQ(0U, heapAllocationCount);
 }
+
+TEST(FontCacheManagerTest, ScopeCleanupIsDistinctFromExplicitClear) {
+  const std::map<int, EpdFontFamily> fonts;
+  const std::map<int, SdCardFont*> sdFonts;
+  FontDecompressor decompressor;
+  FontCacheManager manager(fonts, sdFonts);
+  manager.setFontDecompressor(&decompressor);
+  {
+    auto scope = manager.createPrewarmScope();
+    EXPECT_EQ(0, decompressor.clearCount);
+    EXPECT_EQ(1, decompressor.transientReleaseCount);
+    scope.endScanAndPrewarm();
+  }
+  EXPECT_EQ(0, decompressor.clearCount);
+  EXPECT_EQ(2, decompressor.transientReleaseCount);
+  manager.clearCache();
+  EXPECT_EQ(1, decompressor.clearCount);
+  manager.releaseSdFontCaches();
+  EXPECT_EQ(2, decompressor.clearCount);
+}

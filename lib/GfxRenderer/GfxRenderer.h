@@ -133,11 +133,7 @@ class GfxRenderer {
   // Clears both the flash-font map and any SD-font registration for fontId.
   // Coupled to avoid dangling SdCardFont* in sdCardFonts_ when callers free
   // the underlying SdCardFont and forget the SD-side unregister.
-  void removeFont(int fontId) {
-    fontMap.erase(fontId);
-    sdCardFonts_.erase(fontId);
-    sdCardFontScales_.erase(fontId);
-  }
+  void removeFont(int fontId);
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
   // Batch-prewarm CJK fallback glyphs for a screenful of static strings in ONE
