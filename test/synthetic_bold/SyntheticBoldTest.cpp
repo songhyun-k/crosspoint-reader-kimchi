@@ -44,20 +44,20 @@ bool pixel(const HalDisplay& display, GfxRenderer::Orientation orientation, int 
   switch (orientation) {
     case GfxRenderer::Portrait:
       px = y;
-      py = 479 - x;
+      py = display.getDisplayHeight() - 1 - x;
       break;
     case GfxRenderer::PortraitInverted:
-      px = 799 - y;
+      px = display.getDisplayWidth() - 1 - y;
       py = x;
       break;
     case GfxRenderer::LandscapeClockwise:
-      px = 799 - x;
-      py = 479 - y;
+      px = display.getDisplayWidth() - 1 - x;
+      py = display.getDisplayHeight() - 1 - y;
       break;
     case GfxRenderer::LandscapeCounterClockwise:
       break;
   }
-  return (display.pixels[py * 100 + px / 8] & (0x80 >> (px % 8))) != 0;
+  return (display.pixels[py * display.getDisplayWidthBytes() + px / 8] & (0x80 >> (px % 8))) != 0;
 }
 
 std::vector<uint8_t> cpfont(const uint8_t mask) {
@@ -202,6 +202,82 @@ TEST_F(SyntheticBoldTest, GrayCoverageIsMergedBeforeSelectingTheTwoPlanes) {
     for (int x = 0; x < 4; ++x) {
       const bool bit = pixel(panel, renderer.getOrientation(), 10 + x, 12);
       EXPECT_EQ(bit, mode == GfxRenderer::BW ? false : x >= 2) << mode << ":" << x;
+    }
+  }
+}
+
+TEST_F(SyntheticBoldTest, TwoBitRasterMatchesPixelPathWithRuntimeGeometryAndStripClipping) {
+  EpdFontData grayData = data(true);
+  EpdFont font(&grayData);
+  renderer.insertFont(5, EpdFontFamily(&font));
+  constexpr uint8_t RAW[] = {3, 1, 2, 0, 1, 2};
+  for (bool alternateGeometry : {false, true}) {
+    panel.width = alternateGeometry ? 641 : HalDisplay::DISPLAY_WIDTH;
+    panel.height = alternateGeometry ? 383 : HalDisplay::DISPLAY_HEIGHT;
+    panel.stride = alternateGeometry ? 84 : HalDisplay::DISPLAY_WIDTH_BYTES;
+    renderer.begin();
+    for (int o = 0; o < 4; ++o) {
+      renderer.setOrientation(static_cast<GfxRenderer::Orientation>(o));
+      const int xs[] = {-2, 0, 10, renderer.getScreenWidth() - 4, renderer.getScreenWidth() - 2};
+      const int ys[] = {-3, 0, 17, renderer.getScreenHeight() - 3};
+      for (bool bold : {false, true}) {
+        for (bool black : {false, true}) {
+          for (auto mode : {GfxRenderer::BW, GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {
+            SCOPED_TRACE(testing::Message()
+                         << alternateGeometry << ":" << o << ":" << bold << ":" << black << ":" << mode);
+            renderer.setRenderMode(mode);
+            const uint8_t initial = mode == GfxRenderer::BW && black ? 0xFF : 0;
+            const auto renderText = [&]() {
+              for (int x : xs)
+                for (int y : ys) renderer.drawText(5, x, y, "A", black, bold ? B : R);
+            };
+            panel.pixels.fill(0xA5);
+            renderer.clearScreen(initial);
+            // Independent reference through the unchanged general pixel path.
+            for (int x : xs)
+              for (int y : ys)
+                for (int gy = 0; gy < 2; ++gy) {
+                  uint8_t previous = 0;
+                  for (int gx = 0; gx < (bold ? 4 : 3); ++gx) {
+                    const uint8_t raw = gx < 3 ? RAW[gy * 3 + gx] : 0;
+                    const uint8_t merged = bold ? std::max(raw, previous) : raw;
+                    previous = raw;
+                    const bool paint =
+                        mode == GfxRenderer::BW
+                            ? merged != 0
+                            : (mode == GfxRenderer::GRAYSCALE_LSB ? merged == 2 : merged == 1 || merged == 2);
+                    if (paint) renderer.drawPixel(x + gx, y + 2 + gy, mode == GfxRenderer::BW ? black : false);
+                  }
+                }
+            const auto expected = panel.pixels;
+            panel.pixels.fill(0xA5);
+            renderer.clearScreen(initial);
+            renderText();
+            EXPECT_EQ(panel.pixels, expected);
+
+            int bandY = 19;
+            if (o == GfxRenderer::Portrait) bandY = panel.height - 1 - 12;
+            if (o == GfxRenderer::PortraitInverted) bandY = 12;
+            if (o == GfxRenderer::LandscapeClockwise) bandY = panel.height - 1 - 19;
+            for (int rows : {static_cast<int>(panel.height), 1}) {
+              const int y0 = rows == 1 ? bandY : 0;
+              const size_t size = static_cast<size_t>(panel.stride) * rows;
+              std::vector<uint8_t> strip(size + 32, 0xA5);
+              panel.pixels.fill(0xA5);
+              const auto bw = panel.pixels;
+              renderer.beginStripTarget(strip.data() + 16, y0, rows);
+              renderer.clearScreen(initial);
+              renderText();
+              renderer.endStripTarget();
+              EXPECT_TRUE(std::equal(strip.begin() + 16, strip.begin() + 16 + size,
+                                     expected.begin() + static_cast<size_t>(y0) * panel.stride));
+              EXPECT_EQ(panel.pixels, bw);
+              EXPECT_TRUE(std::all_of(strip.begin(), strip.begin() + 16, [](uint8_t v) { return v == 0xA5; }));
+              EXPECT_TRUE(std::all_of(strip.end() - 16, strip.end(), [](uint8_t v) { return v == 0xA5; }));
+            }
+          }
+        }
+      }
     }
   }
 }

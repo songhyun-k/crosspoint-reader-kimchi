@@ -464,10 +464,70 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
   }
 }
 
+// Portrait glyph rows run across physical rows, with one fixed bit mask per glyph row.
+// Partially clipped glyphs and other orientations retain the general pixel path.
+static bool renderPortrait2BitGlyph(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
+                                    const uint8_t* bitmap, int x, int y, int width, int height, bool syntheticBold,
+                                    bool pixelState) {
+  const auto orientation = renderer.getOrientation();
+  if ((orientation != GfxRenderer::Portrait && orientation != GfxRenderer::PortraitInverted) || width == 0 ||
+      height == 0) {
+    return false;
+  }
+  const int panelWidth = renderer.getDisplayWidth();
+  const int panelHeight = renderer.getDisplayHeight();
+  const int drawWidth = width + (syntheticBold ? 1 : 0);
+  if (x < 0 || y < 0 || x > panelHeight - drawWidth || y > panelWidth - height) {
+    return false;
+  }
+
+  int physicalX, physicalY;
+  rotateCoordinates(orientation, x, y, &physicalX, &physicalY, panelWidth, panelHeight);
+  const bool portrait = orientation == GfxRenderer::Portrait;
+  const int lastY = physicalY + (portrait ? 1 - drawWidth : drawWidth - 1);
+  const int originY = renderer.getWriteOriginY();
+  if (std::min(physicalY, lastY) < originY || std::max(physicalY, lastY) >= originY + renderer.getWriteRows()) {
+    return false;
+  }
+
+  const uint8_t coverageMask =
+      renderMode == GfxRenderer::BW ? 0x0E : (renderMode == GfxRenderer::GRAYSCALE_LSB ? 0x04 : 0x06);
+  const bool setBits = renderMode != GfxRenderer::BW || !pixelState;
+  const int stride = renderer.getDisplayWidthBytes();
+  const int byteStep = portrait ? -stride : stride;
+  const size_t rowOffset = static_cast<size_t>(physicalY - originY) * stride;
+  uint8_t* target = renderer.getWriteTarget();
+  int pixelPosition = 0;
+  for (int glyphY = 0; glyphY < height; ++glyphY) {
+    size_t byteIndex = rowOffset + (physicalX >> 3);
+    const uint8_t mask = 0x80 >> (physicalX & 7);
+    const uint8_t keepMask = ~mask;
+    const uint8_t inkMask = setBits ? mask : 0;
+    uint8_t previousRaw = 0;
+    for (int glyphX = 0; glyphX < width; ++glyphX) {
+      // Packed samples continue across rows, including widths not divisible by four.
+      const uint8_t raw = (bitmap[pixelPosition >> 2] >> ((3 - (pixelPosition & 3)) * 2)) & 3;
+      ++pixelPosition;
+      const uint8_t merged = syntheticBold ? std::max(raw, previousRaw) : raw;
+      previousRaw = raw;
+      if ((coverageMask >> merged) & 1) {
+        target[byteIndex] = (target[byteIndex] & keepMask) | inkMask;
+      }
+      byteIndex += byteStep;
+    }
+    // The extra bold column has no source sample; merge coverage before plane selection.
+    if (syntheticBold && ((coverageMask >> previousRaw) & 1)) {
+      target[byteIndex] = (target[byteIndex] & keepMask) | inkMask;
+    }
+    physicalX += portrait ? 1 : -1;
+  }
+  return true;
+}
+
 template <TextRotation rotation = TextRotation::None>
 static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
                            const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
-                           const bool pixelState, const EpdFontFamily::Style style) {
+                           const bool pixelState, const EpdFontFamily::Style style, const bool isCombining = false) {
   const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
   if (!glyph) {
     LOG_ERR("GFX", "No glyph for codepoint %d", cp);
@@ -512,6 +572,14 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     } else {
       outerBase = cursorY - top;   // screenY = outerBase + glyphY
       innerBase = cursorX + left;  // screenX = innerBase + glyphX
+    }
+
+    if constexpr (rotation == TextRotation::None) {
+      if (is2Bit && !isCombining &&
+          renderPortrait2BitGlyph(renderer, renderMode, bitmap, innerBase, outerBase, width, height, syntheticBold,
+                                  pixelState)) {
+        return;
+      }
     }
 
     if (is2Bit) {
@@ -733,7 +801,7 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
           combiningMark::raiseAboveBase(anchor, combiningGlyph->top, combiningGlyph->height, lastBaseTop);
       const int combiningX = combiningMark::anchorOver(anchor, lastBaseX, lastBaseLeft, lastBaseWidth,
                                                        combiningGlyph->left, combiningGlyph->width);
-      renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, combiningX, yPos - raiseBy, black, style);
+      renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, combiningX, yPos - raiseBy, black, style, true);
       continue;
     }
 

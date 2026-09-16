@@ -16,13 +16,14 @@ class HalDisplay {
   static constexpr uint32_t BUFFER_SIZE = DISPLAY_WIDTH_BYTES * DISPLAY_HEIGHT;
   mutable std::array<uint8_t, BUFFER_SIZE> pixels{};
   bool inverted = false;
+  uint16_t width = DISPLAY_WIDTH, height = DISPLAY_HEIGHT, stride = DISPLAY_WIDTH_BYTES;
 
   uint8_t* getFrameBuffer() const { return pixels.data(); }
-  uint16_t getDisplayWidth() const { return DISPLAY_WIDTH; }
-  uint16_t getDisplayHeight() const { return DISPLAY_HEIGHT; }
-  uint16_t getDisplayWidthBytes() const { return DISPLAY_WIDTH_BYTES; }
-  uint32_t getBufferSize() const { return BUFFER_SIZE; }
-  void clearScreen(uint8_t color = 0xFF) const { pixels.fill(color); }
+  uint16_t getDisplayWidth() const { return width; }
+  uint16_t getDisplayHeight() const { return height; }
+  uint16_t getDisplayWidthBytes() const { return stride; }
+  uint32_t getBufferSize() const { return static_cast<uint32_t>(stride) * height; }
+  void clearScreen(uint8_t color = 0xFF) const { std::memset(pixels.data(), color, getBufferSize()); }
   bool isInverted() const { return inverted; }
   void drawImage(const uint8_t*, uint16_t, uint16_t, uint16_t, uint16_t, bool = false) const {}
   void displayBuffer(RefreshMode = FAST_REFRESH, bool = false) {}
@@ -30,7 +31,7 @@ class HalDisplay {
   void waitRefreshComplete() {}
   bool supportsAsyncRefresh() const { return false; }
   uint8_t* lendFrameBufferStorage(uint32_t* size) {
-    *size = BUFFER_SIZE;
+    *size = getBufferSize();
     return pixels.data();
   }
   void returnFrameBufferStorage() {}
