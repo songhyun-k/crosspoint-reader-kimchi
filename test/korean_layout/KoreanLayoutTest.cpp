@@ -510,3 +510,81 @@ TEST_F(KoreanLayoutTest, IdleChunksPrewarmBuiltPagesAndFinishWithoutMovingTheRea
   }
   EXPECT_EQ(storage_test::files.at("before.page"), storage_test::files.at("after.page"));
 }
+
+TEST_F(KoreanLayoutTest, CjkBoundaryTokensKeepPunctuationMarksAndSoftHyphens) {
+  struct Case {
+    std::string source;
+    size_t tokens;
+    std::string visible;
+  };
+  const Case cases[] = {{"", 0, ""},
+                        {"가", 1, "가"},
+                        {"ASCII", 1, "ASCII"},
+                        {"(가나)", 2, "(가나)"},
+                        {"가(나)다", 3, "가(나)다"},
+                        {"“가나”", 2, "“가나”"},
+                        {"漢字かな", 4, "漢字かな"},
+                        {"ab가cd나", 4, "ab가cd나"},
+                        {"가\xCC\x81나", 2, "가\xCC\x81나"},
+                        {"가\xC2\xAD나", 3, "가나"},
+                        {"𠀀가", 2, "𠀀가"}};
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.source);
+    lines.clear();
+    ParsedText text(true, false, false, zeroIndent(), true);
+    text.addWord(item.source, R, false, false, 65530);
+    EXPECT_EQ(text.size(), item.tokens);
+    layout(text, 480);
+    EXPECT_EQ(contents(lines), item.visible);
+    if (!lines.empty()) EXPECT_EQ(lines.front().offset, 65530u);
+  }
+}
+
+TEST_F(KoreanLayoutTest, CjkAttachmentsKeepActualSpacesStylesAndLinks) {
+  for (const std::string next : {"나", "(나)", "“나”", "漢"}) {
+    for (const bool attached : {false, true}) {
+      SCOPED_TRACE(next + (attached ? " attached" : " spaced"));
+      lines.clear();
+      ParsedText text(true, false, false, zeroIndent(), true);
+      const auto link = text.addLinkTarget("chapter.xhtml#note");
+      text.addWord("가", B, false, false, 65530);
+      text.addWord(next, R, false, attached, attached ? 65531 : 65532, link);
+      layout(text, 480);
+      ASSERT_EQ(lines.size(), 1u);
+      auto& block = *lines.front().block;
+      ASSERT_EQ(block.wordCount(), 2);
+      EXPECT_STREQ(block.wordText(0), "가");
+      EXPECT_STREQ(block.wordText(1), next.c_str());
+      EXPECT_EQ(block.wordStyle(0), B);
+      EXPECT_EQ(block.wordStyle(1), R);
+      EXPECT_EQ(block.wordXpos(1),
+                renderer.getTextAdvanceX(1, "가", B) + (attached ? 0 : renderer.getSpaceWidth(1, B)));
+      EXPECT_EQ(lines.front().offset, 65530u);
+      const auto spans = block.takeLinkSpans();
+      ASSERT_EQ(spans.size(), 1u);
+      EXPECT_STREQ(spans[0].href, "chapter.xhtml#note");
+      EXPECT_EQ(spans[0].x, block.wordXpos(1));
+    }
+  }
+}
+
+TEST_F(KoreanLayoutTest, ParserCjkChunksPreserveThreeAndFourByteCharacters) {
+  struct Case {
+    const char* unit;
+    int count;
+  };
+  const Case cases[] = {{"가", 65}, {"가", 66},  {"가", 67},  {"𠀀", 49}, {"𠀀", 50},
+                        {"𠀀", 51}, {"a가", 49}, {"a가", 50}, {"a가", 51}};
+  for (const auto& item : cases) {
+    lines.clear();
+    pages.clear();
+    std::string source;
+    for (int i = 0; i < item.count; ++i) source += item.unit;
+    SCOPED_TRACE(source.size());
+    ASSERT_TRUE(parse("<p>" + source + "<a href='#note'><b>끝</b></a></p>", 79, 70));
+    EXPECT_EQ(contents(lines), source + "끝");
+    ASSERT_FALSE(pages.empty());
+    EXPECT_TRUE(std::any_of(pages.begin(), pages.end(), [](const auto& page) { return !page->links.empty(); }));
+    for (size_t i = 1; i < lines.size(); ++i) EXPECT_GE(lines[i].offset, lines[i - 1].offset);
+  }
+}
