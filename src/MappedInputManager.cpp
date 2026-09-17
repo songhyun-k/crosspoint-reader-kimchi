@@ -15,10 +15,18 @@ namespace fui = freeink::ui;
 
 void MappedInputManager::update() const {
   gpio.update();
-  const uint8_t down = gpio.getButtonFrame().down;
+  const uint8_t down = gpio.getButtonFrame().down & ~gpio.getButtonFrame().pressed;
   gpio.suppressButtonReleases(suppressedReleaseButtons);
   suppressedReleaseButtons &= down;
   longPressFiredButtons &= down;
+}
+
+void MappedInputManager::discardPendingInput() const {
+  gpio.discardButtonInput();
+  gpio.suppressTouchContact();
+  longPressFiredButtons = 0;
+  suppressedReleaseButtons = 0;
+  touchHeldOverrideValid = false;
 }
 
 bool MappedInputManager::isNavDirectionSwapped() const {
@@ -334,10 +342,14 @@ bool MappedInputManager::wasLongPressed(const Button button, const unsigned long
   const uint8_t mask = buttonMask(button);
   for (uint8_t index = 0; index < HalGPIO::BUTTON_COUNT; ++index) {
     const uint8_t bit = 1u << index;
-    if ((mask & bit) && !(longPressFiredButtons & bit) && gpio.isPressed(index) &&
+    if ((mask & bit) && !(longPressFiredButtons & bit) && (gpio.isPressed(index) || gpio.wasReleased(index)) &&
         gpio.getButtonHeldTime(index) >= thresholdMs) {
       longPressFiredButtons |= bit;
-      suppressedReleaseButtons |= bit;
+      if (gpio.wasReleased(index)) {
+        gpio.suppressButtonReleases(bit);
+      } else {
+        suppressedReleaseButtons |= bit;
+      }
       return true;
     }
   }

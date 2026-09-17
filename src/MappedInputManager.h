@@ -40,6 +40,7 @@ class MappedInputManager {
   MappedInputManager(HalGPIO& gpio, const GfxRenderer& renderer) : gpio(gpio), renderer(renderer) {}
 
   void update() const;
+  void discardPendingInput() const;
 #if FREEINK_CAP_TOUCH
   // X4 Pro delays a single power click until its frontlight double-click window
   // expires. The main loop supplies that one-frame event here.
@@ -47,7 +48,7 @@ class MappedInputManager {
 #endif
   bool wasPressed(Button button) const;
   bool wasReleased(Button button) const;
-  // One-shot threshold event while the button is down; consumes its release.
+  // One-shot sampled hold, including a queued release; consumes that contact's release.
   bool wasLongPressed(Button button, unsigned long thresholdMs) const;
   bool isPressed(Button button) const;
   bool hasTouch() const;

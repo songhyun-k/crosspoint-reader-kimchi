@@ -87,7 +87,7 @@ void ActivityManager::loop() {
     return;
   }
 
-  if (currentActivity) {
+  if (currentActivity && pendingAction == PendingAction::None) {
     if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
       if (currentActivity->handleHomeGesture()) {
         return;
@@ -120,6 +120,7 @@ void ActivityManager::loop() {
   while (pendingAction != PendingAction::None) {
     if (pendingAction == PendingAction::Pop) {
       RenderLock lock;
+      mappedInput.discardPendingInput();
 
       if (!currentActivity) {
         // Should never happen in practice
@@ -167,6 +168,7 @@ void ActivityManager::loop() {
     } else if (pendingActivity) {
       // Current activity has requested a new activity to be launched
       RenderLock lock;
+      mappedInput.discardPendingInput();
 
       if (pendingAction == PendingAction::Replace) {
         // Destroy the current activity
@@ -220,6 +222,7 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
     pendingAction = PendingAction::Replace;
   } else {
     // No current activity, safe to launch immediately
+    mappedInput.discardPendingInput();
     currentActivity = std::move(newActivity);
     currentActivity->onEnter();
   }

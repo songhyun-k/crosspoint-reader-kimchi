@@ -116,5 +116,10 @@ struct TestEsp {
   void restart() { std::abort(); }
 };
 inline TestEsp ESP;
+#ifdef TEST_EXTERNAL_CLOCK
+unsigned long millis();
+void delay(unsigned long);
+#else
 inline unsigned long millis() { return 0; }
 inline void delay(unsigned long) {}
+#endif

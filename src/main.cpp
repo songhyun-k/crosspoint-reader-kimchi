@@ -291,7 +291,7 @@ void enterDeepSleep(bool fromTimeout = false) {
   powerManager.startDeepSleep(gpio);
 }
 
-void setupDisplayAndFonts(bool seamless = false) {
+bool setupDisplayAndFonts(bool seamless = false) {
 #if !FREEINK_MCU_C3
   // C3 resolves its controller in HalGPIO::begin() before SPI claims the
   // display pins. X4 Pro skips that C3-only path, so probe here before
@@ -306,6 +306,9 @@ void setupDisplayAndFonts(bool seamless = false) {
 #endif
 
   display.begin(seamless);
+  // Display detection may still select the X3 board profile. Freeze that
+  // configuration before the sampler starts reading its ADC pins.
+  const bool inputSamplingStarted = gpio.startButtonSampling();
   renderer.begin();
   activityManager.begin();
   LOG_DBG("MAIN", "Display initialized");
@@ -334,6 +337,7 @@ void setupDisplayAndFonts(bool seamless = false) {
   sdFontSystem.begin(renderer);
 
   LOG_DBG("MAIN", "Fonts setup");
+  return inputSamplingStarted;
 }
 
 void setup() {
@@ -479,7 +483,10 @@ void setup() {
   bool allowFastInitialReaderRefresh = false;
   bool needsWakeRefresh = false;
 
-  setupDisplayAndFonts(resume != BootResume::Splash);
+  if (!setupDisplayAndFonts(resume != BootResume::Splash)) {
+    activityManager.goToFullScreenMessage(tr(STR_MEMORY_ERROR), EpdFontFamily::BOLD);
+    return;
+  }
 
   switch (resume) {
     case BootResume::Silent:
@@ -558,14 +565,13 @@ void setup() {
     // during boot dispatches against an invisible Home and the default
     // selectorIndex=0 opens the most-recent book.
     activityManager.requestUpdateAndWait();
-    // Absorb any button held at this point into currentState as a non-edge:
-    // two gpio.update() calls separated by > InputManager's 5ms debounce
-    // transition the held bit through lastDebounceTime into currentState
-    // without setting pressedEvents, so the first loop()'s own gpio.update()
-    // sees state == currentState and emits nothing.
+#if !FREEINK_MCU_C3
+    // Synchronous backends must settle their initial debounce before discard.
     gpio.update();
     delay(10);
     gpio.update();
+#endif
+    mappedInputManager.discardPendingInput();
   }
 
   allowSleepAt = millis() + 2000;
@@ -752,7 +758,9 @@ void loop() {
   // Add delay at the end of the loop to prevent tight spinning
   // When an activity requests skip loop delay (e.g., webserver running), use yield() for faster response
   // Otherwise, use longer delay to save power, unless a raw change still needs debounce.
-  if (activityManager.skipLoopDelay()) {
+  if (gpio.hasPendingButtonFrames()) {
+    delay(1);
+  } else if (activityManager.skipLoopDelay()) {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {

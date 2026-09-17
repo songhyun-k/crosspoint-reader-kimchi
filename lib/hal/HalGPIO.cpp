@@ -153,6 +153,13 @@ bool HalGPIO::isXteinkDevice() const {
 }
 
 bool HalGPIO::verifyPowerButtonWakeup() {
+#if FREEINK_MCU_C3
+  if (samplerState.load() != SamplerState::Stopped) {
+    LOG_ERR("GPIO", "Wake verification requires stopped button sampler");
+    return false;
+  }
+  const AdcLock adcLock(*this);
+#endif
   // M5Paper v1.1: the classic ESP32's reset-to-setup() latency exceeds a normal
   // wheel click, so a click wake is always released before this samples and
   // verification would re-sleep on every wake. Its wheel has hard external
@@ -169,7 +176,7 @@ bool HalGPIO::verifyPowerButtonWakeup() {
     delay(1);
     inputMgr.update();
   }
-  captureButtonFrame();
+  captureButtonFrame(buttonFrame);
   return heldAtFirstSample && inputMgr.isPowerButtonPhysicallyPressed();
 }
 
