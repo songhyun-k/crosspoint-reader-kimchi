@@ -2,6 +2,7 @@
 #include <HalStorage.h>
 
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
