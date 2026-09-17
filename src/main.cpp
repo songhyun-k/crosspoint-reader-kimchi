@@ -117,7 +117,7 @@ EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, 
 // roles share one 10pt family; absent physical styles fall back to regular.
 EpdFont kimchiUiFont(&kimchi_ui_10_regular);
 EpdFontFamily kimchiUiFontFamily(&kimchiUiFont);
-EpdFont kimchiBatangFont(&kimchi_batang_14_regular);
+EpdFont kimchiBatangFont(&kimchi_batang_14_regular, true);
 EpdFontFamily kimchiBatangFontFamily(&kimchiBatangFont);
 
 // Definitions for SilentRestart.h. RTC_NOINIT survives ESP.restart() but not power loss.

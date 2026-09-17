@@ -3,6 +3,7 @@
 #include <FontDecompressor.h>
 #include <GfxRenderer.h>
 #include <SdCardFont.h>
+#include <Utf8.h>
 #include <builtinFonts/kimchi_batang_14_regular.h>
 #include <gtest/gtest.h>
 
@@ -400,4 +401,66 @@ TEST_F(SyntheticBoldTest, RetainedBitmapsAreReleasedForFontRemovalAndFramebuffer
   prewarm();
   EXPECT_GT(decompressor.getStats().pageBufferBytes, 0u);
   renderer.setFontCacheManager(nullptr);
+}
+
+TEST_F(SyntheticBoldTest, ImmutableLookupPreservesMetricsAndRasterAcrossStylesAndPlanes) {
+  static constexpr EpdUnicodeInterval lookupIntervals[] = {
+      {' ', ' ', 0}, {'A', 'C', 1}, {0x301, 0x301, 4}, {0xAC00, 0xAC02, 1}};
+  static constexpr auto compact = [] {
+    auto d = data(true);
+    d.intervals = lookupIntervals;
+    d.intervalCount = std::size(lookupIntervals);
+    return d;
+  }();
+  FontDecompressor decompressor;
+  FontCacheManager cache(renderer.getFontMap(), renderer.getSdCardFonts());
+  cache.setFontDecompressor(&decompressor);
+  renderer.setFontCacheManager(&cache);
+  for (const EpdFontData* d : {&compact, &kimchi_batang_14_regular}) {
+    EpdFont plain(d), fast(d, true);
+    renderer.insertFont(6, EpdFontFamily(&plain));
+    renderer.insertFont(7, EpdFontFamily(&fast));
+    for (const char* text : {"가각갂 ABC", "한글 漢字 .", "가\xCC\x81"}) {
+      for (auto style : {R, B, BI, static_cast<Style>(B | EpdFontFamily::SUP)}) {
+        EXPECT_EQ(renderer.getTextAdvanceX(6, text, style), renderer.getTextAdvanceX(7, text, style));
+        EXPECT_EQ(renderer.getTextWidth(6, text, style), renderer.getTextWidth(7, text, style));
+        for (int o = 0; o < 4; ++o) {
+          renderer.setOrientation(static_cast<GfxRenderer::Orientation>(o));
+          for (auto mode : {GfxRenderer::BW, GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {
+            renderer.setRenderMode(mode);
+            renderer.clearScreen(mode == GfxRenderer::BW ? 0xFF : 0);
+            renderer.drawText(6, -1, 10, text, true, style);
+            const auto expected = panel.pixels;
+            renderer.clearScreen(mode == GfxRenderer::BW ? 0xFF : 0);
+            renderer.drawText(7, -1, 10, text, true, style);
+            EXPECT_EQ(panel.pixels, expected);
+          }
+        }
+      }
+    }
+    renderer.removeFont(6);
+    renderer.removeFont(7);
+  }
+  renderer.setFontCacheManager(nullptr);
+}
+
+TEST_F(SyntheticBoldTest, DefaultSdLookupSurvivesPrewarmReleaseAndReload) {
+  for (uint8_t mask : {1u, 3u, 15u}) {
+    storage_test::files["font"] = cpfont(mask);
+    SdCardFont sd;
+    for (int cycle = 0; cycle < 3; ++cycle) {
+      ASSERT_TRUE(sd.load("font"));
+      EpdFont* font = sd.getEpdFont();
+      ASSERT_NE(font, nullptr);
+      // Prewarm also requests the replacement glyph, which this fixture omits.
+      EXPECT_FALSE(font->hasCodepoint(REPLACEMENT_GLYPH));
+      ASSERT_EQ(sd.prewarm("ABC ", 1), 1);
+      ASSERT_NE(font->getGlyph('A'), nullptr);
+      EXPECT_EQ(font->getGlyph('A')->advanceX, GLYPHS[1].advanceX);
+      sd.releaseResidentCaches();
+      EXPECT_TRUE(font->hasCodepoint('A'));
+      ASSERT_NE(font->getGlyph('A'), nullptr);
+      EXPECT_EQ(font->getGlyph('A')->advanceX, GLYPHS[1].advanceX);
+    }
+  }
 }
