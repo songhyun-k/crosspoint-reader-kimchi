@@ -5,8 +5,8 @@
 
 class Epub {
  public:
-  template <typename Output>
-  bool readItemContentsToStream(const std::string&, Output&, size_t, bool = false) const {
-    return false;
+  const std::string& getPath() const {
+    static const std::string path = "unused.epub";
+    return path;
   }
 };

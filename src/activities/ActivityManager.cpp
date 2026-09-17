@@ -27,57 +27,7 @@
 #include "util/FrontlightPanelActivity.h"
 #include "util/FullScreenMessageActivity.h"
 
-static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
-
-void ActivityManager::begin() {
-#if defined(configNUM_CORES) && configNUM_CORES > 1
-  constexpr BaseType_t renderTaskCore = 1;
-#else
-  constexpr BaseType_t renderTaskCore = 0;
-#endif
-  xTaskCreatePinnedToCore(&renderTaskTrampoline, "ActivityManagerRender",
-                          8192,               // Stack size
-                          this,               // Parameters
-                          1,                  // Priority
-                          &renderTaskHandle,  // Task handle
-                          renderTaskCore  // Keep long renders/cover decodes off CPU 0's idle watchdog when available
-  );
-  assert(renderTaskHandle != nullptr && "Failed to create render task");
-}
-
-void ActivityManager::renderTaskTrampoline(void* param) {
-  auto* self = static_cast<ActivityManager*>(param);
-  self->renderTaskLoop();
-}
-
-void ActivityManager::renderTaskLoop() {
-  while (true) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    // Acquire the lock before reading currentActivity to avoid a TOCTOU race
-    // where the main task deletes the activity between the null-check and render().
-    RenderLock lock;
-    if (currentActivity) {
-      HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
-      // Night mode is a global output polarity applied to every activity.
-      // The sleep screen forces normal polarity itself (SleepActivity).
-      display.setInverted(SETTINGS.screenInverted != 0);
-      currentActivity->render(std::move(lock));
-    }
-    // Notify any task blocked in requestUpdateAndWait() that the render is done.
-    TaskHandle_t waiter = nullptr;
-    taskENTER_CRITICAL(&activityManagerSpinlock);
-    waiter = waitingTaskHandle;
-    waitingTaskHandle = nullptr;
-    taskEXIT_CRITICAL(&activityManagerSpinlock);
-    if (waiter) {
-      xTaskNotify(waiter, 1, eIncrement);
-    }
-  }
-}
-
 void ActivityManager::loop() {
-  if (mappedInput.consumeSuppressedRelease()) return;
-
   if (currentActivity && currentActivity->requiresExclusiveStorageLoop()) {
     currentActivity->loop();
     // An exclusive-storage activity must restart rather than navigate away:
@@ -89,7 +39,7 @@ void ActivityManager::loop() {
     return;
   }
 
-  if (currentActivity) {
+  if (currentActivity && pendingAction == PendingAction::None) {
     if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
       if (currentActivity->handleHomeGesture()) {
         return;
@@ -121,7 +71,9 @@ void ActivityManager::loop() {
 
   while (pendingAction != PendingAction::None) {
     if (pendingAction == PendingAction::Pop) {
+      if (currentActivity && !currentActivity->onPrepareExit()) return;
       RenderLock lock;
+      mappedInput.discardPendingInput();
 
       if (!currentActivity) {
         // Should never happen in practice
@@ -154,12 +106,14 @@ void ActivityManager::loop() {
           auto handler = std::move(currentActivity->resultHandler);
           currentActivity->resultHandler = nullptr;
           lock.unlock();  // Handler may acquire its own lock
-          handler(pendingResult);
+          handler(std::move(pendingResult));
         }
 
         // Request an update to ensure the popped activity gets re-rendered
         if (pendingAction == PendingAction::None) {
-          requestUpdate();
+          lock.unlock();
+          currentActivity->onResume();
+          currentActivity->requestUpdate();
         }
 
         // Handler may request another pending action, we will handle it in the next loop iteration
@@ -167,18 +121,25 @@ void ActivityManager::loop() {
       }
 
     } else if (pendingActivity) {
-      // Current activity has requested a new activity to be launched
-      RenderLock lock;
-
       if (pendingAction == PendingAction::Replace) {
-        // Destroy the current activity
-        exitActivity(lock);
-        // Clear the stack
+        if (currentActivity && !currentActivity->onPrepareExit()) return;
+        {
+          RenderLock lock;
+          exitActivity(lock);
+        }
         while (!stackActivities.empty()) {
+          if (!stackActivities.back()->onPrepareExit()) return;
+          RenderLock lock;
           stackActivities.back()->onExit();
           stackActivities.pop_back();
         }
-      } else if (pendingAction == PendingAction::Push) {
+      }
+      if (pendingAction == PendingAction::Push && currentActivity) currentActivity->onSuspend();
+      // Current activity has requested a new activity to be launched
+      RenderLock lock;
+      mappedInput.discardPendingInput();
+
+      if (pendingAction == PendingAction::Push) {
         if (auto* fcm = renderer.getFontCacheManager()) fcm->clearCache();
         // Move current activity to stack
         stackActivities.push_back(std::move(currentActivity));
@@ -210,20 +171,6 @@ void ActivityManager::exitActivity(const RenderLock& lock) {
   if (currentActivity) {
     currentActivity->onExit();
     currentActivity.reset();
-  }
-}
-
-void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
-  // Note: no lock here, this is usually called by loop() and we may run into deadlock
-  if (currentActivity) {
-    // Defer launch if we're currently in an activity, to avoid deleting the current activity
-    // leading to the "delete this" problem
-    pendingActivity = std::move(newActivity);
-    pendingAction = PendingAction::Replace;
-  } else {
-    // No current activity, safe to launch immediately
-    currentActivity = std::move(newActivity);
-    currentActivity->onEnter();
   }
 }
 
@@ -357,79 +304,3 @@ ScreenshotInfo ActivityManager::getScreenshotInfo() const {
   }
   return {};
 }
-
-void ActivityManager::requestUpdate(bool immediate) {
-  if (immediate) {
-    if (renderTaskHandle) {
-      xTaskNotify(renderTaskHandle, 1, eIncrement);
-    }
-  } else {
-    // Deferring the update until current loop is finished
-    // This is to avoid multiple updates being requested in the same loop
-    requestedUpdate = true;
-  }
-}
-void ActivityManager::requestUpdateAndWait() {
-  if (!renderTaskHandle) {
-    return;
-  }
-
-  // Atomic section to perform checks
-  taskENTER_CRITICAL(&activityManagerSpinlock);
-  auto currTaskHandler = xTaskGetCurrentTaskHandle();
-  auto mutexHolder = xSemaphoreGetMutexHolder(renderingMutex);
-  bool isRenderTask = (currTaskHandler == renderTaskHandle);
-  bool alreadyWaiting = (waitingTaskHandle != nullptr);
-  bool holdingRenderLock = (mutexHolder == currTaskHandler);
-  if (!alreadyWaiting && !isRenderTask && !holdingRenderLock) {
-    waitingTaskHandle = currTaskHandler;
-  }
-  taskEXIT_CRITICAL(&activityManagerSpinlock);
-
-  // Render task cannot call requestUpdateAndWait() or it will cause a deadlock
-  assert(!isRenderTask && "Render task cannot call requestUpdateAndWait()");
-
-  // There should never be the case where 2 tasks are waiting for a render at the same time
-  assert(!alreadyWaiting && "Already waiting for a render to complete");
-
-  // Cannot call while holding RenderLock or it will cause a deadlock
-  assert(!holdingRenderLock && "Cannot call requestUpdateAndWait() while holding RenderLock");
-
-  xTaskNotify(renderTaskHandle, 1, eIncrement);
-  ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-}
-
-// RenderLock
-
-RenderLock::RenderLock() {
-  xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
-  isLocked = true;
-}
-
-RenderLock::RenderLock([[maybe_unused]] Activity&) {
-  xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
-  isLocked = true;
-}
-
-RenderLock::~RenderLock() {
-  if (isLocked) {
-    xSemaphoreGive(activityManager.renderingMutex);
-    isLocked = false;
-  }
-}
-
-void RenderLock::unlock() {
-  if (isLocked) {
-    xSemaphoreGive(activityManager.renderingMutex);
-    isLocked = false;
-  }
-}
-
-/**
- *
- * Checks if renderingMutex is busy.
- *
- * @return true if renderingMutex is busy, otherwise false.
- *
- */
-bool RenderLock::peek() { return xQueuePeek(activityManager.renderingMutex, NULL, 0) != pdTRUE; };

@@ -7,13 +7,22 @@
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+#include "../../chapter_html_slim_parser/stubs/Print.h"
 
 namespace storage_test {
 inline std::unordered_map<std::string, std::vector<uint8_t>> files;
 inline size_t shortReadAt = std::numeric_limits<size_t>::max();
 inline bool negativeRead = false;
 inline size_t reads = 0;
+inline size_t readBytes = 0;
+inline size_t writes = 0;
+inline size_t writeBytes = 0;
+inline size_t shortWriteAt = std::numeric_limits<size_t>::max();
+inline size_t seeks = 0;
+inline size_t lastReadOffset = 0;
 inline size_t largestRead = 0;
 inline size_t openHandles = 0;
 inline void reset() {
@@ -21,15 +30,28 @@ inline void reset() {
   shortReadAt = std::numeric_limits<size_t>::max();
   negativeRead = false;
   reads = largestRead = 0;
+  readBytes = seeks = lastReadOffset = 0;
+  writes = writeBytes = 0;
+  shortWriteAt = std::numeric_limits<size_t>::max();
 }
 }  // namespace storage_test
 
-class HalFile {
+class HalFile : public Print {
  public:
   HalFile() = default;
   ~HalFile() { close(); }
   HalFile(const HalFile&) = delete;
   HalFile& operator=(const HalFile&) = delete;
+  HalFile(HalFile&& other) noexcept
+      : bytes_(std::exchange(other.bytes_, nullptr)), offset_(std::exchange(other.offset_, 0)) {}
+  HalFile& operator=(HalFile&& other) noexcept {
+    if (this != &other) {
+      close();
+      bytes_ = std::exchange(other.bytes_, nullptr);
+      offset_ = std::exchange(other.offset_, 0);
+    }
+    return *this;
+  }
 
   bool open(const std::string& path) {
     close();
@@ -41,6 +63,7 @@ class HalFile {
   }
   int read(void* dest, size_t count) {
     ++storage_test::reads;
+    storage_test::lastReadOffset = offset_;
     storage_test::largestRead = std::max(storage_test::largestRead, count);
     if (!bytes_ || offset_ > bytes_->size()) return -1;
     if (offset_ == storage_test::shortReadAt) {
@@ -50,16 +73,21 @@ class HalFile {
     count = std::min(count, bytes_->size() - offset_);
     if (count > 0) std::memcpy(dest, bytes_->data() + offset_, count);
     offset_ += count;
+    storage_test::readBytes += count;
     return static_cast<int>(count);
   }
-  size_t write(const void* source, const size_t count) {
+  size_t write(const void* source, size_t count) {
+    ++storage_test::writes;
     if (!bytes_) return 0;
+    if (offset_ == storage_test::shortWriteAt && count > 0) --count;
     bytes_->resize(std::max(bytes_->size(), offset_ + count));
     if (count) std::memcpy(bytes_->data() + offset_, source, count);
     offset_ += count;
+    storage_test::writeBytes += count;
     return count;
   }
-  size_t write(const uint8_t byte) { return write(&byte, 1); }
+  size_t write(const uint8_t* source, size_t count) override { return write(static_cast<const void*>(source), count); }
+  size_t write(const uint8_t byte) override { return write(&byte, 1); }
   size_t position() const { return offset_; }
   size_t size() const { return fileSize64(); }
   size_t fileSize() const { return size(); }
@@ -67,6 +95,7 @@ class HalFile {
   bool flush() const { return isOpen(); }
   bool seekCur(const size_t bytes) { return seek64(offset_ + bytes); }
   bool seek64(uint64_t offset) {
+    ++storage_test::seeks;
     if (!bytes_ || offset > bytes_->size()) return false;
     offset_ = static_cast<size_t>(offset);
     return true;
@@ -116,5 +145,10 @@ struct TestEsp {
   void restart() { std::abort(); }
 };
 inline TestEsp ESP;
+#ifdef TEST_EXTERNAL_CLOCK
+unsigned long millis();
+void delay(unsigned long);
+#else
 inline unsigned long millis() { return 0; }
 inline void delay(unsigned long) {}
+#endif

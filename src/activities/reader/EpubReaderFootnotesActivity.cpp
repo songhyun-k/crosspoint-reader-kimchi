@@ -9,9 +9,19 @@
 namespace fui = freeink::ui;
 
 EpubReaderFootnotesActivity::EpubReaderFootnotesActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                                         const std::vector<FootnoteEntry>& footnotes)
-    : UiListActivity("EpubReaderFootnotes", renderer, mappedInput), footnotes(footnotes) {
+                                                         std::vector<FootnoteEntry> footnotes)
+    : UiListActivity("EpubReaderFootnotes", renderer, mappedInput), footnotes(std::move(footnotes)) {
   buildRowItems();
+}
+
+bool EpubReaderFootnotesActivity::onPrepareExit() {
+  RenderLock lock;
+  if (!std::holds_alternative<FootnoteResult>(result.data)) {
+    result.isCancelled = true;
+    result.data = FootnoteResult{};
+  }
+  std::get<FootnoteResult>(result.data).footnotes = std::move(footnotes);
+  return true;
 }
 
 // footnotes never changes after construction (no reload path), so this only

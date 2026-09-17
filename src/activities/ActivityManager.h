@@ -30,7 +30,7 @@ enum class HomeMenuItem { NONE, FILE_BROWSER, RECENTS, OPDS_BROWSER, FILE_TRANSF
  * wifi network, and get back the selected network when the user is done.
  *
  * Main differences from Android's ActivityManager:
- * - No onPause/onResume, since we don't have a concept of background activities
+ * - Suspended activities stay on the stack; only the current activity receives loop/render updates.
  * - onActivityResult is implemented via a callback instead of a separate method, for simplicity
  */
 class ActivityManager {
@@ -54,16 +54,16 @@ class ActivityManager {
   static void renderTaskTrampoline(void* param);
   [[noreturn]] virtual void renderTaskLoop();
 
-  // Set by requestUpdateAndWait(); read and cleared by the render task after render completes.
+  // Set by requestUpdateAndWait(); captured at work entry, cleared after that work completes.
   // Note: only one waiting task is supported at a time
   TaskHandle_t waitingTaskHandle = nullptr;
+  Activity* renderCleanupTarget = nullptr;
 
   // Mutex to protect rendering operations from race conditions
   // Must only be used via RenderLock
   SemaphoreHandle_t renderingMutex = nullptr;
 
-  // Whether to trigger a render after the current loop()
-  // This variable must only be set by the main loop, to avoid race conditions
+  // Coalesced request, consumed by main before notifying the render task.
   std::atomic<bool> requestedUpdate{false};
 
  public:
@@ -100,6 +100,8 @@ class ActivityManager {
   // Remove the currentActivity, returning the last one on stack
   // Note: if popActivity() on last activity on the stack, we will goHome()
   void popActivity();
+  // Main uses this when deciding whether a reader action returned to its page.
+  bool hasPendingTransition() const { return pendingAction != PendingAction::None; }
 
   bool preventAutoSleep() const;
   bool requiresExclusiveStorageLoop() const;
@@ -114,7 +116,9 @@ class ActivityManager {
 
   // Trigger a render and block until it completes.
   // Must NOT be called from the render task or while holding a RenderLock.
-  void requestUpdateAndWait();
+  bool requestUpdateAndWait();
+  // Main must retain the activity and hold no RenderLock until this returns.
+  bool retireActivity(Activity& activity);
 };
 
 extern ActivityManager activityManager;  // singleton, to be defined in main.cpp

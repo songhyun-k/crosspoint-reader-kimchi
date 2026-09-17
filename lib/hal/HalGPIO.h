@@ -2,6 +2,9 @@
 
 #include <Arduino.h>
 #include <InputManager.h>
+#include <freertos/semphr.h>
+
+#include <atomic>
 
 // Display SPI pins (custom pins for XteinkX4, not hardware SPI defaults)
 #define EPD_SCLK 8   // SPI Clock
@@ -39,6 +42,51 @@
 #define QMI8658_WHO_AM_I_VALUE 0x05  // WHO_AM_I expected value
 
 class HalGPIO {
+ public:
+  static constexpr uint8_t BUTTON_COUNT = 7;
+  // One observation, owned by the producer until published, then by the main UI.
+  // Durations stop at capture time: time spent waiting for the UI is not a hold.
+  struct ButtonFrame {
+    uint32_t sequence = 0;
+    uint32_t capturedAtMs = 0;
+    uint32_t droppedFrames = 0;
+    uint32_t buttonHeldMs[BUTTON_COUNT] = {};
+    uint32_t heldMs = 0;
+    uint32_t powerHeldMs = 0;
+    uint8_t down = 0;
+    uint8_t pressed = 0;
+    uint8_t released = 0;
+    bool debouncePending = false;
+  };
+
+ private:
+  ButtonFrame buttonFrame;
+  uint8_t suppressedContacts = 0;
+  bool waitForIdle = false;
+  uint32_t reportedDroppedFrames = 0;
+  void captureButtonFrame(ButtonFrame& frame);
+  void reconcileButtonInput();
+#if FREEINK_MCU_C3
+  enum class SamplerState : uint8_t { Stopped, Running, StopRequested, Quiescent };
+  std::atomic<SamplerState> samplerState{SamplerState::Stopped};
+  // Only this mutex protects the physical snapshot and FIFO. Never hold it
+  // across activity, renderer, SD or USB/battery I2C calls.
+  StaticSemaphore_t inputMutexStorage{};
+  SemaphoreHandle_t inputMutex = nullptr;
+  ButtonFrame physicalFrame;
+  StaticQueue_t frameQueueControl{};
+  QueueHandle_t frameQueue = nullptr;
+  // 40ms press/release: 26 transitions per 1s consumer stall, plus phase margin.
+  static constexpr uint8_t INPUT_FRAME_CAPACITY = 32;
+  alignas(ButtonFrame) uint8_t frameQueueStorage[INPUT_FRAME_CAPACITY * sizeof(ButtonFrame)]{};
+  static constexpr uint32_t INPUT_STACK_BYTES = 2048;
+  static constexpr uint32_t INPUT_POLL_MS = 10;
+  alignas(portBYTE_ALIGNMENT) StackType_t inputStack[INPUT_STACK_BYTES / sizeof(StackType_t)]{};
+  StaticTask_t inputTaskControl{};
+  TaskHandle_t inputTask = nullptr;
+  static void inputTaskTrampoline(void* context);
+  void sampleButtons();
+#endif
 #if CROSSPOINT_EMULATED == 0
   InputManager inputMgr;
 #endif
@@ -53,7 +101,26 @@ class HalGPIO {
   DeviceType _deviceType = DeviceType::X4;
 
  public:
+#if FREEINK_MCU_C3
+  // Arduino's ADC wrapper discards adc_oneshot_read contention errors. The
+  // sampler and X4 battery ADC must share this guard; never wrap I2C or UI work.
+  class AdcLock {
+    SemaphoreHandle_t mutex;
+
+   public:
+    explicit AdcLock(const HalGPIO& owner) : mutex(owner.inputMutex) {
+      if (mutex) xSemaphoreTake(mutex, portMAX_DELAY);
+    }
+    ~AdcLock() {
+      if (mutex) xSemaphoreGive(mutex);
+    }
+    AdcLock(const AdcLock&) = delete;
+    AdcLock& operator=(const AdcLock&) = delete;
+  };
+#endif
+
   HalGPIO() = default;
+  ~HalGPIO();
 
   // Inline device type helpers for cleaner downstream checks
   inline bool deviceIsX3() const { return _deviceType == DeviceType::X3; }
@@ -69,15 +136,27 @@ class HalGPIO {
   // Start button GPIO and setup SPI for screen and SD card
   void begin();
 
-  // Button input methods
+  // Start after wake verification. C3 SDK state belongs to the sampler until
+  // stopButtonSampling() has acknowledged its last use and deleted the task.
+  bool startButtonSampling();
+  void stopButtonSampling();
+  // Main-thread consumption: one retained frame, or the latest idle/held sample.
   void update();
-  // Raw changes still awaiting the SDK debounce; this is not a button event.
+  bool hasPendingButtonFrames() const;
+  ButtonFrame getPhysicalButtonFrame() const;
+  // Cancel old-context frames and mute incomplete contacts through release.
+  void discardButtonInput();
+  // Latest physical raw change awaiting debounce, independent of the replayed UI frame.
   bool isDebouncePending() const;
   bool isPressed(uint8_t buttonIndex) const;
   bool wasPressed(uint8_t buttonIndex) const;
   bool wasAnyPressed() const;
   bool wasReleased(uint8_t buttonIndex) const;
   bool wasAnyReleased() const;
+  // Queries never advance the frame; update() is the consumption boundary.
+  const ButtonFrame& getButtonFrame() const { return buttonFrame; }
+  unsigned long getButtonHeldTime(uint8_t buttonIndex) const;
+  void suppressButtonReleases(uint8_t buttons);
   unsigned long getHeldTime() const;
   unsigned long getPowerButtonHeldTime() const;
   bool hasTouch() const;

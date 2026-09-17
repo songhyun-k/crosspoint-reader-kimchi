@@ -9,9 +9,22 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <new>
 #include <vector>
 
 #include "test/xtc_memory/BinaryFixture.h"
+
+namespace {
+size_t fallibleScalarAllocations = 0;
+}
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+  ++fallibleScalarAllocations;
+  try {
+    return ::operator new(size);
+  } catch (...) {
+    return nullptr;
+  }
+}
 
 namespace {
 using Style = EpdFontFamily::Style;
@@ -60,7 +73,7 @@ bool pixel(const HalDisplay& display, GfxRenderer::Orientation orientation, int 
   return (display.pixels[py * display.getDisplayWidthBytes() + px / 8] & (0x80 >> (px % 8))) != 0;
 }
 
-std::vector<uint8_t> cpfont(const uint8_t mask) {
+std::vector<uint8_t> cpfont(const uint8_t mask, const bool kernLigatures = false) {
   using binary_fixture::append;
   using binary_fixture::put;
   uint8_t count = 0;
@@ -78,9 +91,24 @@ std::vector<uint8_t> cpfont(const uint8_t mask) {
     put(bytes, offset + 8, std::size(GLYPHS), 4);
     put(bytes, offset + 12, 6, 1);
     put(bytes, offset + 13, 4, 2);
+    if (kernLigatures) {
+      put(bytes, offset + 17, 2, 2);
+      put(bytes, offset + 19, 2, 2);
+      put(bytes, offset + 21, 2, 1);
+      put(bytes, offset + 22, 2, 1);
+      put(bytes, offset + 23, 1, 1);
+    }
     put(bytes, offset + 24, bytes.size(), 4);
     for (const auto& interval : INTERVALS) append(bytes, interval);
     for (const auto& glyph : GLYPHS) append(bytes, glyph);
+    if (kernLigatures) {
+      for (int side = 0; side < 2; ++side) {
+        append(bytes, EpdKernClassEntry{'A', 1});
+        append(bytes, EpdKernClassEntry{'B', 2});
+      }
+      for (int8_t value : {0, -8, -4, 0}) append(bytes, value);
+      append(bytes, EpdLigaturePair{('A' << 16) | 'B', 'C'});
+    }
     bytes.push_back(MONO[0]);
   }
   return bytes;
@@ -353,6 +381,12 @@ TEST_F(SyntheticBoldTest, PrewarmScopeReusesKoreanBitmapsAcrossStylesAndScopes) 
   const auto index = static_cast<uint32_t>(glyph - body.data->glyph);
   const auto* bitmap = decompressor.getBitmap(body.data, glyph, index);
   ASSERT_NE(bitmap, nullptr);
+  {
+    auto empty = cache.createPrewarmScope();
+    empty.deferPrewarm();
+  }
+  EXPECT_FALSE(cache.isPrewarming());
+  EXPECT_EQ(decompressor.getBitmap(body.data, glyph, index), bitmap);
   for (const char* text : {"한글 본문", "한글"}) {
     auto scope = cache.createPrewarmScope();
     renderer.drawText(6, 10, 10, text, true, BI);
@@ -399,5 +433,282 @@ TEST_F(SyntheticBoldTest, RetainedBitmapsAreReleasedForFontRemovalAndFramebuffer
   renderer.insertFont(6, EpdFontFamily(&body));
   prewarm();
   EXPECT_GT(decompressor.getStats().pageBufferBytes, 0u);
+  renderer.setFontCacheManager(nullptr);
+}
+
+TEST_F(SyntheticBoldTest, ResumedSdPrewarmPublishesCompleteGlyphsWithoutRepeatingIo) {
+  storage_test::files["font"] = cpfont(1, true);
+  SdCardFont sd;
+  ASSERT_TRUE(sd.load("font"));
+  renderer.registerSdCardFont(100, &sd);
+  renderer.insertFont(100, EpdFontFamily(sd.getEpdFont()));
+  const auto reads = storage_test::reads;
+  const auto bytes = storage_test::readBytes;
+  const auto seeks = storage_test::seeks;
+  ASSERT_EQ(sd.prewarm("AB", 1), 1);  // This tiny fixture has no replacement glyph.
+  const auto fullReads = storage_test::reads - reads;
+  const auto fullBytes = storage_test::readBytes - bytes;
+  const auto fullSeeks = storage_test::seeks - seeks;
+  EXPECT_EQ(sd.getEpdFont()->getKerning('A', 'B'), -8);
+  EXPECT_EQ(sd.getEpdFont()->getLigature('A', 'B'), 'C');
+  renderer.clearScreen();
+  renderer.drawText(100, 10, 10, "AB BA", true);
+  const auto expected = panel.pixels;
+
+  sd.releaseResidentCaches();
+  const auto resumeReads = storage_test::reads;
+  const auto resumeBytes = storage_test::readBytes;
+  const auto resumeSeeks = storage_test::seeks;
+  ASSERT_TRUE(sd.beginPrewarm("AB", 1));
+  EXPECT_TRUE(sd.isPrewarming());
+  EXPECT_EQ(sd.prewarmSome(0), SdCardFont::PREWARM_PENDING);
+  unsigned steps = 0;
+  int result = SdCardFont::PREWARM_PENDING;
+  const size_t firstGlyph = 64 + sizeof(INTERVALS) + sizeof(EpdGlyph);
+  const size_t firstKernRow = 64 + sizeof(INTERVALS) + sizeof(GLYPHS) + 4 * sizeof(EpdKernClassEntry);
+  bool sawMetadata = false, sawKernRow = false;
+  while (result == SdCardFont::PREWARM_PENDING && steps++ < 100) {
+    const auto before = storage_test::reads;
+    result = sd.prewarmSome(1);
+    EXPECT_LE(storage_test::reads - before, 1u);
+    if (storage_test::reads != before && storage_test::lastReadOffset == firstGlyph) {
+      sawMetadata = true;
+      EXPECT_EQ(sd.getEpdFont()->data->glyph, nullptr);
+    }
+    if (storage_test::reads != before && storage_test::lastReadOffset == firstKernRow) {
+      sawKernRow = true;
+      EXPECT_EQ(sd.getEpdFont()->data->glyph, nullptr);
+    }
+  }
+  ASSERT_EQ(result, 1);
+  EXPECT_FALSE(sd.isPrewarming());
+  EXPECT_TRUE(sawMetadata);
+  EXPECT_TRUE(sawKernRow);
+  EXPECT_EQ(storage_test::reads - resumeReads, fullReads);
+  EXPECT_EQ(storage_test::readBytes - resumeBytes, fullBytes);
+  EXPECT_EQ(storage_test::seeks - resumeSeeks, fullSeeks);
+  EXPECT_EQ(storage_test::openHandles, 0u);
+  EXPECT_EQ(sd.getEpdFont()->getKerning('A', 'B'), -8);
+  EXPECT_EQ(sd.getEpdFont()->getLigature('A', 'B'), 'C');
+  renderer.clearScreen();
+  renderer.drawText(100, 10, 10, "AB BA", true);
+  EXPECT_EQ(panel.pixels, expected);
+
+  const auto warmReads = storage_test::reads;
+  ASSERT_TRUE(sd.beginPrewarm("AB", 1));
+  do {
+    result = sd.prewarmSome(1);
+  } while (result == SdCardFont::PREWARM_PENDING);
+  EXPECT_EQ(result, 1);
+  EXPECT_EQ(storage_test::reads, warmReads);
+  renderer.removeFont(100);
+}
+
+TEST_F(SyntheticBoldTest, CancelAndReadFailureReleaseUnpublishedSdPrewarm) {
+  storage_test::files["font"] = cpfont(1, true);
+  constexpr size_t glyph = 64 + sizeof(INTERVALS) + sizeof(EpdGlyph);
+  constexpr size_t kern = 64 + sizeof(INTERVALS) + sizeof(GLYPHS) + 4 * sizeof(EpdKernClassEntry);
+  constexpr size_t bitmap = kern + 4 + sizeof(EpdLigaturePair);
+  SdCardFont sd;
+  ASSERT_TRUE(sd.load("font"));
+  for (const size_t boundary : {glyph, bitmap, kern}) {
+    sd.releaseResidentCaches();
+    ASSERT_TRUE(sd.beginPrewarm("AB", 1));
+    bool reached = false;
+    for (unsigned step = 0; step < 100 && !reached; ++step) {
+      const auto before = storage_test::reads;
+      ASSERT_EQ(sd.prewarmSome(1), SdCardFont::PREWARM_PENDING);
+      reached = storage_test::reads != before && storage_test::lastReadOffset == boundary;
+    }
+    ASSERT_TRUE(reached);
+    EXPECT_EQ(sd.getEpdFont()->data->glyph, nullptr);
+    sd.clearCache();  // Cache release cancels the in-flight operation too.
+    EXPECT_FALSE(sd.isPrewarming());
+    EXPECT_EQ(storage_test::openHandles, 0u);
+    EXPECT_EQ(sd.getEpdFont()->data->glyph, nullptr);
+    EXPECT_EQ(sd.prewarm("AB", 1), 1);
+    EXPECT_EQ(sd.getEpdFont()->getKerning('A', 'B'), -8);
+  }
+  for (const size_t failedRead : {glyph, bitmap, kern}) {
+    sd.releaseResidentCaches();
+    storage_test::shortReadAt = failedRead;
+    storage_test::negativeRead = true;
+    ASSERT_TRUE(sd.beginPrewarm("AB", 1));
+    int result = SdCardFont::PREWARM_PENDING;
+    for (unsigned step = 0; result == SdCardFont::PREWARM_PENDING && step < 100; ++step) result = sd.prewarmSome(1);
+    EXPECT_GT(result, 0);
+    EXPECT_FALSE(sd.isPrewarming());
+    EXPECT_EQ(storage_test::openHandles, 0u);
+    if (failedRead != kern) EXPECT_EQ(sd.getEpdFont()->data->glyph, nullptr);
+    EXPECT_EQ(sd.getEpdFont()->getKerning('A', 'B'), 0);
+    storage_test::shortReadAt = std::numeric_limits<size_t>::max();
+    storage_test::negativeRead = false;
+  }
+}
+
+TEST_F(SyntheticBoldTest, ResumedCompressedGlyphsMatchBatchForBothGroupLayouts) {
+  EpdFontData font = kimchi_batang_14_regular;
+  const auto& last = font.intervals[font.intervalCount - 1];
+  std::vector<uint16_t> groupMap(last.offset + last.last - last.first + 1);
+  for (uint16_t g = 0; g < font.groupCount; ++g) {
+    const auto& group = font.groups[g];
+    std::fill_n(groupMap.begin() + group.firstGlyphIndex, group.glyphCount, g);
+  }
+  EpdFont body(&font);
+  const auto* glyph = body.getGlyph(0xD55C);
+  ASSERT_NE(glyph, nullptr);
+  const auto index = static_cast<uint32_t>(glyph - font.glyph);
+  FontDecompressor decompressor;
+  ASSERT_EQ(decompressor.prewarmCache(&font, "한글 본문"), 0);
+  const auto* bitmap = decompressor.getBitmap(&font, glyph, index);
+  ASSERT_NE(bitmap, nullptr);
+  const std::vector<uint8_t> expected(bitmap, bitmap + glyph->dataLength);
+  for (const bool mapped : {false, true}) {
+    decompressor.clearCache();
+    font.glyphToGroup = mapped ? groupMap.data() : nullptr;
+    ASSERT_EQ(decompressor.beginPrewarm(&font, "한글 본문"), FontDecompressor::PREWARM_PENDING);
+    EXPECT_EQ(decompressor.prewarmSome(0), FontDecompressor::PREWARM_PENDING);
+    // Incomplete page entries must use the valid on-demand fallback.
+    bitmap = decompressor.getBitmap(&font, glyph, index);
+    ASSERT_NE(bitmap, nullptr);
+    EXPECT_TRUE(std::equal(expected.begin(), expected.end(), bitmap));
+    int result = FontDecompressor::PREWARM_PENDING;
+    for (unsigned step = 0; result == FontDecompressor::PREWARM_PENDING && step < 2048; ++step) {
+      result = decompressor.prewarmSome(1);
+    }
+    ASSERT_EQ(result, 0);
+    EXPECT_FALSE(decompressor.isPrewarming());
+    const size_t allocations = fallibleScalarAllocations;
+    const int warmResult = decompressor.beginPrewarm(&font, "한글 본문");
+    EXPECT_EQ(fallibleScalarAllocations, allocations);
+    EXPECT_EQ(warmResult, 0);
+    decompressor.resetStats();
+    bitmap = decompressor.getBitmap(&font, glyph, index);
+    ASSERT_NE(bitmap, nullptr);
+    EXPECT_TRUE(std::equal(expected.begin(), expected.end(), bitmap));
+    EXPECT_EQ(decompressor.getStats().cacheMisses, 0u);
+  }
+}
+
+TEST_F(SyntheticBoldTest, DeferredFontGroupsPreserveIoAndRasterAndCancelBeforeRemoval) {
+  storage_test::files["font"] = cpfont(1, true);
+  SdCardFont sd;
+  ASSERT_TRUE(sd.load("font"));
+  renderer.registerSdCardFont(100, &sd);
+  renderer.insertFont(100, EpdFontFamily(sd.getEpdFont()));
+  EpdFont body(&kimchi_batang_14_regular);
+  renderer.insertFont(6, EpdFontFamily(&body));
+  FontDecompressor decompressor;
+  FontCacheManager cache(renderer.getFontMap(), renderer.getSdCardFonts());
+  cache.setFontDecompressor(&decompressor);
+  renderer.setFontCacheManager(&cache);
+  const auto draw = [&] {
+    renderer.drawText(100, 10, 10, "AB BA", true, B);
+    renderer.drawText(6, 10, 40, "한글 본문", true);
+  };
+  const auto reads = storage_test::reads;
+  const auto bytes = storage_test::readBytes;
+  const auto seeks = storage_test::seeks;
+  {
+    auto scope = cache.createPrewarmScope();
+    draw();
+    scope.endScanAndPrewarm();
+  }
+  const auto batchReads = storage_test::reads - reads;
+  const auto batchBytes = storage_test::readBytes - bytes;
+  const auto batchSeeks = storage_test::seeks - seeks;
+  renderer.clearScreen();
+  draw();
+  const auto expected = panel.pixels;
+  cache.releaseSdFontCaches();
+  const auto resumeReads = storage_test::reads;
+  const auto resumeBytes = storage_test::readBytes;
+  const auto resumeSeeks = storage_test::seeks;
+  {
+    auto scope = cache.createPrewarmScope();
+    draw();
+    scope.deferPrewarm();
+  }
+  EXPECT_TRUE(cache.isPrewarming());
+  EXPECT_FALSE(cache.prewarmSome(0));
+  for (unsigned step = 0; cache.isPrewarming() && step < 2048; ++step) {
+    const auto before = storage_test::reads;
+    cache.prewarmSome(1);
+    EXPECT_LE(storage_test::reads - before, 1u);
+  }
+  EXPECT_FALSE(cache.isPrewarming());
+  EXPECT_EQ(storage_test::reads - resumeReads, batchReads);
+  EXPECT_EQ(storage_test::readBytes - resumeBytes, batchBytes);
+  EXPECT_EQ(storage_test::seeks - resumeSeeks, batchSeeks);
+  renderer.clearScreen();
+  draw();
+  EXPECT_EQ(panel.pixels, expected);
+  EXPECT_EQ(decompressor.getStats().cacheMisses, 0u);
+
+  // Required rendering keeps its scope alive across worker returns. Scanning
+  // and preparation must leave the currently displayed framebuffer intact.
+  cache.releaseSdFontCaches();
+  renderer.clearScreen(0x55);
+  const auto beforePreparation = panel.pixels;
+  const auto requiredReads = storage_test::reads;
+  const auto requiredBytes = storage_test::readBytes;
+  const auto requiredSeeks = storage_test::seeks;
+  {
+    auto scope = cache.createPrewarmScope();
+    draw();
+    renderer.drawLine(0, 0, 100, 100, 2, true);
+    renderer.fillRect(10, 10, 80, 40, true);
+    scope.beginPrewarm();
+    ASSERT_TRUE(cache.isPrewarming());
+    for (unsigned step = 0; cache.isPrewarming() && step < 2048; ++step) cache.prewarmSome(1);
+    ASSERT_FALSE(cache.isPrewarming());
+    EXPECT_EQ(storage_test::reads - requiredReads, batchReads);
+    EXPECT_EQ(storage_test::readBytes - requiredBytes, batchBytes);
+    EXPECT_EQ(storage_test::seeks - requiredSeeks, batchSeeks);
+    EXPECT_EQ(panel.pixels, beforePreparation);
+    EXPECT_NE(sd.getEpdFont()->data->glyph, nullptr);
+    renderer.clearScreen();
+    draw();
+    EXPECT_EQ(panel.pixels, expected);
+  }
+  EXPECT_FALSE(cache.isPrewarming());
+  EXPECT_EQ(storage_test::openHandles, 0u);
+
+  // Cancelling before scope destruction must not drain unfinished work.
+  for (const int id : {6, 100}) {
+    cache.releaseSdFontCaches();
+    size_t readsAtCancel = 0;
+    {
+      auto scope = cache.createPrewarmScope();
+      renderer.drawText(id, 10, 10, id == 6 ? "한글" : "AB", true);
+      scope.beginPrewarm();
+      EXPECT_FALSE(cache.prewarmSome(1));
+      EXPECT_TRUE(id == 6 ? decompressor.isPrewarming() : sd.isPrewarming());
+      readsAtCancel = storage_test::reads;
+      cache.cancelPrewarm();
+    }
+    EXPECT_EQ(storage_test::reads, readsAtCancel);
+    EXPECT_FALSE(cache.isPrewarming());
+    EXPECT_FALSE(decompressor.isPrewarming());
+    EXPECT_FALSE(sd.isPrewarming());
+    EXPECT_EQ(storage_test::openHandles, 0u);
+  }
+
+  for (const int id : {6, 100}) {
+    cache.releaseSdFontCaches();
+    {
+      auto scope = cache.createPrewarmScope();
+      renderer.drawText(id, 10, 10, id == 6 ? "한글" : "AB", true);
+      scope.deferPrewarm();
+    }
+    EXPECT_FALSE(cache.prewarmSome(1));  // Starts the engine without completing it.
+    EXPECT_TRUE(id == 6 ? decompressor.isPrewarming() : sd.isPrewarming());
+    cache.prewarmSome(1);
+    renderer.removeFont(id);
+    EXPECT_FALSE(cache.isPrewarming());
+    EXPECT_FALSE(decompressor.isPrewarming());
+    EXPECT_FALSE(sd.isPrewarming());
+    EXPECT_EQ(storage_test::openHandles, 0u);
+  }
   renderer.setFontCacheManager(nullptr);
 }

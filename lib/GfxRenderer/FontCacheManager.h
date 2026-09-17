@@ -11,6 +11,7 @@ class SdCardFont;
 class FontCacheManager {
  public:
   FontCacheManager(const std::map<int, EpdFontFamily>& fontMap, const std::map<int, SdCardFont*>& sdCardFonts);
+  ~FontCacheManager();
 
   void setFontDecompressor(FontDecompressor* d);
 
@@ -23,6 +24,9 @@ class FontCacheManager {
   void prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F);
   void logStats(const char* label = "render");
   void resetStats();
+  bool prewarmSome(uint16_t maxUnits);
+  void cancelPrewarm();
+  bool isPrewarming() const;
 
   // Scan-mode API: called by GfxRenderer::drawText() during scan pass
   bool isScanning() const;
@@ -36,7 +40,11 @@ class FontCacheManager {
    public:
     explicit PrewarmScope(FontCacheManager& manager);
     ~PrewarmScope();
+    // Keep the scope alive while the owner resumes prewarmSome(), then draws.
+    void beginPrewarm();
     void endScanAndPrewarm();
+    // Transfer the scan to the manager; its owner resumes it between render passes.
+    void deferPrewarm();
     PrewarmScope(PrewarmScope&& other) noexcept;
     PrewarmScope& operator=(PrewarmScope&&) = delete;
     PrewarmScope(const PrewarmScope&) = delete;
@@ -53,7 +61,7 @@ class FontCacheManager {
   const std::map<int, SdCardFont*>& sdCardFonts_;
   FontDecompressor* fontDecompressor_ = nullptr;
 
-  enum class ScanMode : uint8_t { None, Scanning, Prewarming };
+  enum class ScanMode : uint8_t { None, Scanning, Prewarming, Deferred };
   ScanMode scanMode_ = ScanMode::None;
 
   // A render pass touches at most a handful of font ids. Codepoints are packed
@@ -74,4 +82,8 @@ class FontCacheManager {
   uint16_t scanCodepointCount_ = 0;
   uint8_t scanFontCount_ = 0;
   bool scanOverflowWarned_ = false;
+  int8_t prewarmGroup_ = -1;
+  SdCardFont* pendingSdFont_ = nullptr;
+  void beginPrewarm(bool deferred);
+  void finishPrewarm();
 };

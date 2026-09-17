@@ -14,7 +14,7 @@ struct PageLink {
   int16_t width = 0;
   int16_t height = 0;
 
-  PageLink() { href[0] = '\0'; }
+  PageLink() : href{} {}
 
   bool contains(const int pageX, const int pageY, const int slop, const int minWidth) const {
     const int horizontalSlop = std::max(slop, (minWidth - width) / 2);

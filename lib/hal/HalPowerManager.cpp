@@ -68,6 +68,7 @@ void HalPowerManager::setPowerSaving(bool enabled) {
 }
 
 void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
+  gpio.stopButtonSampling();
 #ifdef ENABLE_SERIAL_LOG
   // Tear down HWCDC so the host sees a clean disconnect and the peripheral
   // doesn't hold power domains that interfere with USB-powered GPIO wake.
@@ -151,7 +152,13 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
     return _batteryCachedPercent;
   }
 
-  uint16_t percent = battery.readPercentage();
+  uint16_t percent;
+  {
+#if FREEINK_MCU_C3
+    const HalGPIO::AdcLock adcLock(gpio);
+#endif
+    percent = battery.readPercentage();
+  }
   if (BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX4 && BoardConfig::ACTIVE.batteryAdc >= 0) {
     percent = battery_percent::correctX4AdcSample(percent);
   }

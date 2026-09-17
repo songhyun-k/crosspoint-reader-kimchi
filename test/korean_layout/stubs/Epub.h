@@ -4,10 +4,11 @@
 #include <string>
 
 class CssParser;
-// ZIP extraction and book metadata are outside these layout/cache tests. The
-// section consumes a real cached XHTML file through the memory HalStorage.
+// Book metadata fixture; extraction, parsing and cache I/O use production code.
 class Epub {
  public:
+  std::string archivePath = "images.epub";
+  std::string spineHref = "chapter.xhtml";
   struct Spine {
     std::string href = "chapter.xhtml";
   };
@@ -16,14 +17,11 @@ class Epub {
     std::string anchor;
   };
   std::string getCachePath() const { return "cache"; }
+  const std::string& getPath() const { return archivePath; }
   std::string getLanguage() const { return "ko"; }
-  Spine getSpineItem(int) const { return {}; }
+  Spine getSpineItem(int) const { return {spineHref}; }
   Toc getTocItem(int) const { return {}; }
   int getTocIndexForSpineIndex(int) const { return -1; }
   int getTocItemsCount() const { return 0; }
   CssParser* getCssParser() const { return nullptr; }
-  template <typename Output>
-  bool readItemContentsToStream(const std::string&, Output&, size_t, bool = false) const {
-    return false;
-  }
 };

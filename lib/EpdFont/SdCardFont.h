@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,12 +23,9 @@
 class SdCardFont {
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
-  // prewarmStyle: the bitmap arena did not fit the largest free block.
-  // Distinct from a missed-glyph count so the caller can retry smaller.
-  static constexpr int PREWARM_ARENA_TOO_LARGE = -2;
   static constexpr uint8_t MAX_STYLES = 4;
 
-  SdCardFont() = default;
+  SdCardFont();
   ~SdCardFont();
   // Owns raw buffers freed in dtor — no shallow-copy semantics. Make any
   // accidental pass-by-value or move a compile-time error.
@@ -64,6 +62,14 @@ class SdCardFont {
   int prewarm(TextGetter getter, const void* ctx, uint32_t textCount, uint8_t styleMask = 0x0F,
               bool metadataOnly = false, bool loadKernLig = true);
 
+  // A unit finishes one glyph/bitmap/kern-row read, or one bounded preparation phase.
+  // Only the caller owning font rendering may resume or cancel this operation.
+  static constexpr int PREWARM_PENDING = -3;
+  bool beginPrewarm(const char* utf8Text, uint8_t styleMask = 0x0F);
+  int prewarmSome(uint16_t maxUnits);
+  void cancelPrewarm();
+  bool isPrewarming() const { return prewarm_ != nullptr; }
+
   // Build a compact advance-only table for layout measurement.
   // Extracts ALL unique codepoints from words (no MAX_PAGE_GLYPHS cap),
   // batch-reads advanceX from SD, stores in a sorted per-style table.
@@ -71,8 +77,29 @@ class SdCardFont {
   // (e.g. shaped Arabic presentation forms the measurement path will look up).
   // Returns number of codepoints not found in font coverage.
   int buildAdvanceTable(const char* utf8Text, uint8_t styleMask = 0x0F, const char* extraText = nullptr);
-  int buildAdvanceTable(const std::deque<std::string>& words, bool includeHyphen, uint8_t styleMask = 0x0F,
-                        const char* extraText = nullptr);
+
+  class AdvancePreparation {
+    struct State;
+    std::unique_ptr<State> state;
+    int result = 0;
+    friend class SdCardFont;
+
+   public:
+    static constexpr int PENDING = -3;
+    AdvancePreparation();
+    ~AdvancePreparation();
+    AdvancePreparation(AdvancePreparation&&) noexcept;
+    AdvancePreparation& operator=(AdvancePreparation&&) noexcept;
+    AdvancePreparation(const AdvancePreparation&) = delete;
+    AdvancePreparation& operator=(const AdvancePreparation&) = delete;
+    // A unit collects/maps one codepoint, reads one glyph, or completes a bounded setup/publication.
+    // PENDING while active; otherwise the batch missing-glyph result, or -1 on setup failure.
+    int prepareSome(uint16_t maxUnits);
+  };
+  // Keep words and font alive, without changing the words or reloading the font.
+  // Destroying it cancels unpublished work and closes its file.
+  AdvancePreparation beginAdvanceTable(const std::deque<std::string>& words, bool includeHyphen,
+                                       uint8_t styleMask = 0x0F, std::string extraText = {});
 
   // Look up advanceX for a codepoint from the advance table.
   // Returns the 12.4 fixed-point advance, or 0 if not found.
@@ -210,7 +237,7 @@ class SdCardFont {
     // ensureArrayCapacity early-returns once capacities converge on the book's
     // max, so page turns stop touching the allocator (the free/realloc-per-page
     // pattern was a primary heap fragmenter). Data: the next prewarm
-    // subset-checks against the resident tables (see prewarmStyle), so the idle
+    // subset-checks against the resident tables (see preparePrewarmStyle), so the idle
     // prewarm of page N+1 serves the actual turn with zero SD reads. Retention
     // is bounded two ways in resetStyleMiniData(): a heap floor frees outright
     // under pressure, and sustained underuse (an outlier page's oversized bitmap
@@ -226,7 +253,7 @@ class SdCardFont {
     uint32_t miniIntervalCapacity = 0;
     uint32_t miniGlyphCapacity = 0;
     uint32_t miniBitmapCapacity = 0;
-    // Bitmap bytes the current page actually used (set by prewarmStyle), the
+    // Bitmap bytes the current page actually used (set by preparePrewarmStyle), the
     // underuse-hysteresis signal; 0 = no bitmap built this scope (metadata-only
     // prewarm), which leaves the hysteresis counter untouched.
     uint32_t miniBitmapUsed = 0;
@@ -303,13 +330,22 @@ class SdCardFont {
   AdvanceEntry* advanceTable_[MAX_STYLES] = {};
   uint32_t advanceTableSize_[MAX_STYLES] = {};
   bool advanceTableLookup(uint8_t styleIdx, uint32_t codepoint, uint16_t* outAdvance) const;
-  // Merge sortedNew (sorted by codepoint, no overlap with existing) into the
+  // Merge sortedNew (sorted by codepoint, possibly overlapping existing) into the
   // advance table for styleIdx, preserving sort order; cap-truncates the tail.
   void mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sortedNew, uint32_t newCount);
 
   Stats stats_;
   uint32_t contentHash_ = 0;
   bool loaded_ = false;
+
+  struct PrewarmState;
+  std::unique_ptr<PrewarmState> prewarm_;
+  bool beginPrewarm(TextGetter getter, const void* ctx, uint32_t textCount, uint8_t styleMask, bool metadataOnly,
+                    bool loadKernLig);
+  int preparePrewarmStyle(PrewarmState& work);
+  void finishPrewarmStyle(PrewarmState& work, int missed);
+  void publishPrewarmStyle(PrewarmState& work);
+  bool prepareMiniKern(PrewarmState& work);
 
   // Per-style helpers
   void freeStyleMiniData(PerStyle& s);
@@ -320,16 +356,12 @@ class SdCardFont {
   void freeStyleAll(PerStyle& s);
   void freeStyleKernLigatureData(PerStyle& s);
   void freeStyleMiniKern(PerStyle& s);
-  bool loadStyleKernLigatureData(PerStyle& s);
-  bool buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, uint32_t cpCount);
+  int loadStyleKernLigatureSome(PrewarmState& work);
   void applyKernLigaturePointers(PerStyle& s, EpdFontData& data) const;
   void applyGlyphMissCallback(uint8_t styleIdx);
   int32_t findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const;
-  int fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCount, uint8_t styleMask);
-  template <typename Iter>
-  int buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, bool includeHyphen, uint8_t styleMask,
-                             const char* extraText = nullptr);
-  int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly, bool loadKernLig);
+  AdvancePreparation startAdvances(TextGetter getter, const void* ctx, uint32_t textCount, bool includeSpace,
+                                   bool includeHyphen, uint8_t styleMask, const char* extraText);
 
   // Global helpers
   void freeAll();

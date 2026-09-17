@@ -35,9 +35,12 @@ FontCacheManager::FontCacheManager(const std::map<int, EpdFontFamily>& fontMap,
                                    const std::map<int, SdCardFont*>& sdCardFonts)
     : fontMap_(fontMap), sdCardFonts_(sdCardFonts) {}
 
+FontCacheManager::~FontCacheManager() { cancelPrewarm(); }
+
 void FontCacheManager::setFontDecompressor(FontDecompressor* d) { fontDecompressor_ = d; }
 
 void FontCacheManager::clearCache() {
+  cancelPrewarm();
   if (fontDecompressor_) fontDecompressor_->clearCache();
   for (auto& [id, font] : sdCardFonts_) {
     font->clearCache();
@@ -68,6 +71,7 @@ void FontCacheManager::retainScanFonts() {
 }
 
 void FontCacheManager::releaseSdFontCaches() {
+  cancelPrewarm();
   if (fontDecompressor_) fontDecompressor_->clearCache();
   for (auto& [id, font] : sdCardFonts_) {
     font->releaseResidentCaches();
@@ -193,53 +197,112 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
 // --- PrewarmScope implementation ---
 
 FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager) : manager_(&manager) {
+  manager_->cancelPrewarm();
   manager_->scanMode_ = ScanMode::Scanning;
   manager_->releaseScopeCache();
   manager_->resetStats();
-  manager_->scanCodepointCount_ = 0;
-  manager_->scanFontCount_ = 0;
   manager_->scanOverflowWarned_ = false;
-  memset(manager_->scanGroupCounts_, 0, sizeof(manager_->scanGroupCounts_));
 }
 
-void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
-  manager_->scanMode_ = ScanMode::None;
-  if (manager_->scanCodepointCount_ == 0) return;
+void FontCacheManager::beginPrewarm(const bool deferred) {
+  if (scanMode_ != ScanMode::Scanning) return;
+  scanMode_ = deferred ? ScanMode::Deferred : ScanMode::Prewarming;
+  if (scanCodepointCount_ == 0) {
+    finishPrewarm();
+    return;
+  }
+  retainScanFonts();
+  std::sort(scanCodepoints_, scanCodepoints_ + scanCodepointCount_);
+  prewarmGroup_ = SCAN_GROUP_COUNT - 1;
+}
 
-  manager_->retainScanFonts();
-  manager_->scanMode_ = ScanMode::Prewarming;
-  std::sort(manager_->scanCodepoints_, manager_->scanCodepoints_ + manager_->scanCodepointCount_);
+bool FontCacheManager::isPrewarming() const {
+  return scanMode_ == ScanMode::Prewarming || scanMode_ == ScanMode::Deferred;
+}
 
-  uint16_t groupStarts[SCAN_GROUP_COUNT] = {};
-  for (uint8_t group = 1; group < SCAN_GROUP_COUNT; group++) {
-    groupStarts[group] = groupStarts[group - 1] + manager_->scanGroupCounts_[group - 1];
+void FontCacheManager::finishPrewarm() {
+  const bool deferred = scanMode_ == ScanMode::Deferred;
+  scanMode_ = ScanMode::None;
+  prewarmGroup_ = -1;
+  pendingSdFont_ = nullptr;
+  scanCodepointCount_ = 0;
+  scanFontCount_ = 0;
+  memset(scanGroupCounts_, 0, sizeof(scanGroupCounts_));
+  if (deferred) releaseScopeCache();
+}
+
+void FontCacheManager::cancelPrewarm() {
+  if (pendingSdFont_) pendingSdFont_->cancelPrewarm();
+  if (fontDecompressor_) fontDecompressor_->cancelPrewarm();
+  finishPrewarm();
+}
+
+bool FontCacheManager::prewarmSome(const uint16_t maxUnits) {
+  if (!isPrewarming()) return true;
+  if (maxUnits == 0) return false;
+  if (pendingSdFont_) {
+    const int result = pendingSdFont_->prewarmSome(maxUnits);
+    if (result == SdCardFont::PREWARM_PENDING) return false;
+    if (result != 0) LOG_DBG("FCM", "Deferred SD prewarm result: %d", result);
+    pendingSdFont_ = nullptr;
+    --prewarmGroup_;
+    return false;
+  } else if (fontDecompressor_ && fontDecompressor_->isPrewarming()) {
+    const int result = fontDecompressor_->prewarmSome(maxUnits);
+    if (result == FontDecompressor::PREWARM_PENDING) return false;
+    if (result != 0) LOG_DBG("FCM", "Deferred built-in prewarm result: %d", result);
+    --prewarmGroup_;
+    return false;
+  }
+  while (prewarmGroup_ >= 0 && scanGroupCounts_[prewarmGroup_] == 0) --prewarmGroup_;
+  if (prewarmGroup_ < 0) {
+    finishPrewarm();
+    return true;
   }
 
-  // Each packed entry provides four bytes, enough for one UTF-8 codepoint.
-  // Encoding high groups first means a terminator can overwrite only a group
-  // that has already been prewarmed; unread lower groups remain intact.
-  for (int group = SCAN_GROUP_COUNT - 1; group >= 0; group--) {
-    const uint16_t groupCount = manager_->scanGroupCounts_[group];
-    if (groupCount == 0) continue;
-
-    const uint16_t groupStart = groupStarts[group];
-    char* const utf8Text = reinterpret_cast<char*>(manager_->scanCodepoints_ + groupStart);
-    char* output = utf8Text;
-    for (uint16_t i = 0; i < groupCount; i++) {
-      const uint32_t codepoint = manager_->scanCodepoints_[groupStart + i] & SCAN_CODEPOINT_MASK;
-      output = appendUtf8Codepoint(output, codepoint);
+  uint16_t start = 0;
+  for (int group = 0; group < prewarmGroup_; ++group) start += scanGroupCounts_[group];
+  const uint16_t count = scanGroupCounts_[prewarmGroup_];
+  // Reverse group order keeps the in-place UTF-8 terminator out of unread entries.
+  char* const text = reinterpret_cast<char*>(scanCodepoints_ + start);
+  char* output = text;
+  for (uint16_t i = 0; i < count; ++i) {
+    output = appendUtf8Codepoint(output, scanCodepoints_[start + i] & SCAN_CODEPOINT_MASK);
+  }
+  *output = '\0';
+  const int fontId = scanFontIds_[prewarmGroup_ / 4];
+  const uint8_t styleMask = 1 << (prewarmGroup_ & 3);
+  const auto sd = sdCardFonts_.find(fontId);
+  if (sd != sdCardFonts_.end()) {
+    if (sd->second->beginPrewarm(text, styleMask)) {
+      pendingSdFont_ = sd->second;
+    } else {
+      LOG_ERR("FCM", "Cannot start SD prewarm for font %d", fontId);
+      --prewarmGroup_;
     }
-    *output = '\0';
-
-    const uint8_t fontSlot = static_cast<uint8_t>(group) / 4;
-    const uint8_t style = static_cast<uint8_t>(group) & 0x03;
-    manager_->prewarmCache(manager_->scanFontIds_[fontSlot], utf8Text, 1 << style);
+  } else {
+    const auto font = fontMap_.find(fontId);
+    int result = 0;
+    if (fontDecompressor_ && font != fontMap_.end()) {
+      const auto style = static_cast<EpdFontFamily::Style>(prewarmGroup_ & 3);
+      result = fontDecompressor_->beginPrewarm(font->second.getData(style), text);
+    }
+    if (result != FontDecompressor::PREWARM_PENDING) --prewarmGroup_;
   }
+  return false;
+}
 
-  manager_->scanMode_ = ScanMode::None;
-  manager_->scanCodepointCount_ = 0;
-  manager_->scanFontCount_ = 0;
-  memset(manager_->scanGroupCounts_, 0, sizeof(manager_->scanGroupCounts_));
+void FontCacheManager::PrewarmScope::beginPrewarm() { manager_->beginPrewarm(false); }
+
+void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
+  beginPrewarm();
+  while (!manager_->prewarmSome(UINT16_MAX)) {
+  }
+}
+
+void FontCacheManager::PrewarmScope::deferPrewarm() {
+  manager_->beginPrewarm(true);
+  active_ = false;
 }
 
 FontCacheManager::PrewarmScope::~PrewarmScope() {

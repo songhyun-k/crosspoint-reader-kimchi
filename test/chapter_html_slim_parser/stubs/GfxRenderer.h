@@ -1,6 +1,7 @@
 #pragma once
 
 #include <EpdFontFamily.h>
+#include <SdCardFont.h>
 
 #include <deque>
 #include <string>
@@ -20,5 +21,7 @@ class GfxRenderer {
   int getKerning(int, uint32_t, uint32_t, EpdFontFamily::Style) const { return 0; }
   int getSpaceAdvance(int, uint32_t, uint32_t, EpdFontFamily::Style) const { return 4; }
   bool isSdCardFont(int) const { return false; }
-  void ensureSdCardFontReady(int, const std::deque<std::string>&, bool, uint8_t) const {}
+  SdCardFont::AdvancePreparation beginSdCardFontAdvances(int, const std::deque<std::string>&, bool, uint8_t) const {
+    return {};  // This renderer has no SD fonts; the operation implementation is real.
+  }
 };

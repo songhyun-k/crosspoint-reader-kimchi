@@ -30,6 +30,13 @@ class Activity {
   virtual ~Activity() = default;
   virtual void onEnter();
   virtual void onExit();
+  // Main calls this before taking RenderLock for destruction. False defers exit.
+  virtual bool onPrepareExit() { return true; }
+  // Runs on the existing render task; never performs a UI transition.
+  virtual void onRenderExit() {}
+  // Main calls this without RenderLock before another activity takes input ownership.
+  virtual void onSuspend() {}
+  virtual void onResume() {}
   virtual void loop() {}
 
   virtual void render(RenderLock&&) {}

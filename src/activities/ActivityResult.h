@@ -1,11 +1,14 @@
 #pragma once
 
+#include <Epub/FootnoteEntry.h>
+
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 struct WifiResult {
   bool connected = false;
@@ -61,6 +64,7 @@ struct NetworkModeResult {
 
 struct FootnoteResult {
   std::string href;
+  std::vector<FootnoteEntry> footnotes;
 };
 
 struct FilePathResult {
@@ -83,4 +87,5 @@ struct ActivityResult {
   ActivityResult(ResultType&& result) : data{std::forward<ResultType>(result)} {}
 };
 
-using ActivityResultHandler = std::function<void(const ActivityResult&)>;
+// A result has one recipient, which may take ownership of its payload.
+using ActivityResultHandler = std::function<void(ActivityResult&&)>;

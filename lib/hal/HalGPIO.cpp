@@ -139,67 +139,6 @@ void HalGPIO::begin() {
   inputMgr.begin();
 }
 
-void HalGPIO::update() {
-  inputMgr.update();
-  const bool connected = isUsbConnected();
-  usbStateChanged = (connected != lastUsbConnected);
-  lastUsbConnected = connected;
-}
-
-bool HalGPIO::isDebouncePending() const { return inputMgr.isDebouncePending(); }
-
-bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
-
-bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }
-
-bool HalGPIO::wasPressed(uint8_t buttonIndex) const { return inputMgr.wasPressed(buttonIndex); }
-
-bool HalGPIO::wasAnyPressed() const { return inputMgr.wasAnyPressed(); }
-
-bool HalGPIO::wasReleased(uint8_t buttonIndex) const { return inputMgr.wasReleased(buttonIndex); }
-
-bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased(); }
-
-unsigned long HalGPIO::getHeldTime() const { return inputMgr.getHeldTime(); }
-
-unsigned long HalGPIO::getPowerButtonHeldTime() const { return inputMgr.getPowerButtonHeldTime(); }
-
-bool HalGPIO::hasTouch() const { return inputMgr.hasTouch(); }
-
-bool HalGPIO::hasHomeKey() const { return BoardConfig::hasHomeKey(); }
-
-bool HalGPIO::wasHomeKeyTapped() const { return inputMgr.wasHomeKeyTapped(); }
-
-bool HalGPIO::wasHomeKeyLongPressed() const { return inputMgr.wasHomeKeyLongPressed(); }
-
-bool HalGPIO::wasTouchTap(float& nx, float& ny) const { return inputMgr.wasTouchTap(nx, ny); }
-
-bool HalGPIO::wasTouchDown(float& nx, float& ny) const { return inputMgr.wasTouchPressedAt(nx, ny); }
-
-bool HalGPIO::wasTouchReleased() const { return inputMgr.wasTouchReleased(); }
-
-bool HalGPIO::isTouchTapCandidate(float& nx, float& ny, unsigned long& heldMs) const {
-  return inputMgr.isTouchTapCandidate(nx, ny, heldMs);
-}
-
-bool HalGPIO::isTouchHeldAt(float& nx, float& ny) const { return inputMgr.isTouchHeldAt(nx, ny); }
-
-bool HalGPIO::wasTouchLongPress(float& nx, float& ny) const { return inputMgr.wasTouchLongPress(nx, ny); }
-
-void HalGPIO::suppressTouchContact() { inputMgr.suppressTouchContact(); }
-
-unsigned long HalGPIO::lastTouchHeldMs() const { return inputMgr.lastTouchHeldMs(); }
-
-bool HalGPIO::wasSwipe(float& nxStart, float& nyStart, float& nxEnd, float& nyEnd) const {
-  return inputMgr.wasSwipe(nxStart, nyStart, nxEnd, nyEnd);
-}
-
-bool HalGPIO::wasTouchActivity() const { return inputMgr.wasTouchActivity(); }
-
-void HalGPIO::setSharedConfirmPowerShortPressEmitsPower(const bool enabled) {
-  InputManager::setSharedConfirmPowerShortPressEmitsPower(enabled);
-}
-
 bool HalGPIO::hasEdgeSideButtons() const {
   return BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX3 ||
          BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX3Uc8279 ||
@@ -214,6 +153,13 @@ bool HalGPIO::isXteinkDevice() const {
 }
 
 bool HalGPIO::verifyPowerButtonWakeup() {
+#if FREEINK_MCU_C3
+  if (samplerState.load() != SamplerState::Stopped) {
+    LOG_ERR("GPIO", "Wake verification requires stopped button sampler");
+    return false;
+  }
+  const AdcLock adcLock(*this);
+#endif
   // M5Paper v1.1: the classic ESP32's reset-to-setup() latency exceeds a normal
   // wheel click, so a click wake is always released before this samples and
   // verification would re-sleep on every wake. Its wheel has hard external
@@ -230,6 +176,7 @@ bool HalGPIO::verifyPowerButtonWakeup() {
     delay(1);
     inputMgr.update();
   }
+  captureButtonFrame(buttonFrame);
   return heldAtFirstSample && inputMgr.isPowerButtonPhysicallyPressed();
 }
 

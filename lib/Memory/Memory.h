@@ -33,6 +33,14 @@ std::unique_ptr<T> makeUniqueNoThrow(size_t count) {
   return std::unique_ptr<T>(new (std::nothrow) Elem[count]());
 }
 
+// Nothrow make_unique_for_overwrite: the caller fills each element before reading it.
+template <typename T>
+  requires std::is_unbounded_array_v<T>
+std::unique_ptr<T> makeUniqueNoThrowForOverwrite(size_t count) {
+  using Elem = std::remove_extent_t<T>;
+  return std::unique_ptr<T>(new (std::nothrow) Elem[count]);
+}
+
 // Helper struct to call a cleanup function on exit from any scope.
 // Use with a lambda to avoid unnecessary allocations from std::function/std::bind:
 // Example:

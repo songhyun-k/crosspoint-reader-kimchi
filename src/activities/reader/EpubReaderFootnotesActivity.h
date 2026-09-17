@@ -9,7 +9,8 @@
 class EpubReaderFootnotesActivity final : public UiListActivity {
  public:
   explicit EpubReaderFootnotesActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                       const std::vector<FootnoteEntry>& footnotes);
+                                       std::vector<FootnoteEntry> footnotes);
+  bool onPrepareExit() override;
 
  private:
   int listCount() const override { return static_cast<int>(footnotes.size()); }
@@ -22,7 +23,7 @@ class EpubReaderFootnotesActivity final : public UiListActivity {
   // Hints show Back only (empty list) or Back/Select; no Up/Down labels.
   void drawFooter() override;
 
-  const std::vector<FootnoteEntry>& footnotes;
+  std::vector<FootnoteEntry> footnotes;
   // Built once in the constructor (footnotes is fixed for this activity's
   // lifetime, no reload path) and reused by buildScreen() on every repaint
   // instead of rebuilding a ListItem vector per render.
