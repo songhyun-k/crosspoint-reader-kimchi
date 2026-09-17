@@ -6,6 +6,7 @@
 #include <Memory.h>
 
 #include <algorithm>
+#include <cstring>
 
 struct ZipInflateCtx {
   HalFile* file = nullptr;
