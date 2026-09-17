@@ -12,6 +12,7 @@ class Page;
 class GfxRenderer;
 class ChapterHtmlSlimParser;
 class CssParser;
+class ZipFile;
 
 class Section {
   std::shared_ptr<Epub> epub;
@@ -35,7 +36,29 @@ class Section {
   // live parser plus the strings it references (the parser stores them by reference)
   // and the in-RAM page-offset table.
   struct BuildContext {
+    enum class Phase : uint8_t {
+      ExtractBegin,
+      Extract,
+      StartParse,
+      Parse,
+      PageLut,
+      CountAnchors,
+      Anchors,
+      ParagraphLut,
+      ListLut,
+      VisibleLut,
+      Trailer,
+      Header,
+      Version,
+      Publish
+    };
     std::unique_ptr<ChapterHtmlSlimParser> parser;
+    std::unique_ptr<ZipFile> htmlStream;
+    HalFile htmlOutput;
+    ReaderRenderSpec spec;
+    std::function<void()> popupFn;
+    std::string sourcePath;
+    uint8_t extractAttempts = 0;
     std::vector<PageLutEntry> lut;
     std::string parsePath;
     std::string contentBase;
@@ -52,6 +75,11 @@ class Section {
     // the EMA is stepped once per build advance (not per redraw) to damp that wobble.
     float smoothedEstimate = 0;
     uint32_t smoothedAtConsumed = 0;
+    Phase phase = Phase::Parse;
+    size_t commitCursor = 0;
+    uint32_t tableOffsets[5] = {};
+    uint16_t anchorCount = 0;
+    uint8_t commitVersion = 0;
   };
   std::unique_ptr<BuildContext> build_;
   bool buildComplete_ = false;
@@ -66,9 +94,14 @@ class Section {
   uint32_t partialBytesConsumed_ = 0;
   uint32_t partialTotalBytes_ = 0;
   bool finalizeBuild();
+  bool extractHtmlSome(bool drain);
+  bool beginLayout();
   // Write the LUTs/anchor map (and, for a partial, the watermark trailer), patch the
   // header, stamp the version byte, and swap the tmp .bin over filePath.
   bool commitBuildFile(uint8_t version, uint32_t bytesConsumed, uint32_t totalBytes);
+  void beginCommit(uint8_t version);
+  enum class CommitStatus { More, Done, Error };
+  CommitStatus commitSome(uint16_t maxUnits);
   // Builds write here and are swapped over filePath only on commit, so a prior
   // partial/finalized file stays readable while a rebuild is in progress.
   std::string binTmpPath() const { return filePath + ".part"; }
@@ -100,6 +133,8 @@ class Section {
   // Optional parse-step limit lets idle work return even before a page is ready.
   bool buildSomeMore(int maxPages, int maxParseSteps = 0);
   bool isBuilding() const { return static_cast<bool>(build_); }
+  // Apply heap admission between operations, not while their buffers await a resume.
+  bool hasRetainedBuildOperation() const;
   bool isBuildComplete() const { return buildComplete_; }
   // Best-known total page count: the exact pageCount once finalized, or a smoothed byte-based
   // estimate (pages so far scaled by totalBytes/bytesConsumed, damped by an EMA) while a giant spine

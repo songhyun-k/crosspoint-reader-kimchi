@@ -285,8 +285,7 @@ void EpubReaderActivity::openReaderMenu() {
 bool EpubReaderActivity::buildTickHeapGate() {
   const size_t freeHeap = ESP.getFreeHeap();
   const size_t maxBlock = ESP.getMaxAllocHeap();
-  buildHeapPaused = freeHeap < BACKGROUND_BUILD_MIN_FREE_HEAP || maxBlock < BACKGROUND_BUILD_MIN_MAX_ALLOC;
-  return !buildHeapPaused;
+  return freeHeap >= BACKGROUND_BUILD_MIN_FREE_HEAP && maxBlock >= BACKGROUND_BUILD_MIN_MAX_ALLOC;
 }
 
 void EpubReaderActivity::showBuildPopup(GfxRenderer& renderer, int& pagesUntilFullRefresh) {
@@ -362,7 +361,8 @@ void EpubReaderActivity::runBackgroundWork() {
 
   if (section && (allowSpeculativeWork || section->currentPage >= static_cast<int>(section->pageCount)) &&
       !section->isBuilding() && section->isPartial() && buildViewportWidth > 0 && !partialRebuildStartFailed &&
-      section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
+      section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount) &&
+      buildTickHeapGate()) {
     const ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
     if (!section->startBuild(buildSpec)) {
       partialRebuildStartFailed = true;
@@ -377,7 +377,7 @@ void EpubReaderActivity::runBackgroundWork() {
       section->isBuilding() &&
       (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD ||
        finishWhileIdle) &&
-      buildTickHeapGate()) {
+      (section->hasRetainedBuildOperation() || buildTickHeapGate())) {
     if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK, 1)) {
       LOG_ERR("ERS", "Background section build failed");
       cancelPageTurns(EpubPageTurns::Outcome::Failed, "section build");
@@ -388,9 +388,9 @@ void EpubReaderActivity::runBackgroundWork() {
     }
   }
   constexpr unsigned long IDLE_PREWARM_DEBOUNCE_MS = 400;
-  if (allowSpeculativeWork && section && renderer.hasFrameBuffer() && lastRenderCompleteMs != 0 &&
-      millis() - lastRenderCompleteMs > IDLE_PREWARM_DEBOUNCE_MS && ESP.getFreeHeap() > RENDER_MIN_FREE_HEAP &&
-      ESP.getMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
+  if (allowSpeculativeWork && section && !section->hasRetainedBuildOperation() && renderer.hasFrameBuffer() &&
+      lastRenderCompleteMs != 0 && millis() - lastRenderCompleteMs > IDLE_PREWARM_DEBOUNCE_MS &&
+      ESP.getFreeHeap() > RENDER_MIN_FREE_HEAP && ESP.getMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
       (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
     const int nextPage = section->currentPage + 1;
     if (nextPage < static_cast<int>(section->pageCount)) {
@@ -2018,8 +2018,12 @@ void EpubReaderActivity::handleOverlayInput() {
       Command command{Control::Toc};
       command.argument = panelIndex;
       runCommand(command);
-      overlay = Overlay::None;
-      discardOverlayPage();
+      {
+        RenderLock lock;
+        overlay = Overlay::None;
+        discardOverlayPage();
+      }
+      onResume();
       requestUpdate();
     } else if (overlay == Overlay::More) {
       activateMoreRow(panelIndex);

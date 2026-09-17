@@ -9,9 +9,22 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <new>
 #include <vector>
 
 #include "test/xtc_memory/BinaryFixture.h"
+
+namespace {
+size_t fallibleScalarAllocations = 0;
+}
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+  ++fallibleScalarAllocations;
+  try {
+    return ::operator new(size);
+  } catch (...) {
+    return nullptr;
+  }
+}
 
 namespace {
 using Style = EpdFontFamily::Style;
@@ -565,6 +578,10 @@ TEST_F(SyntheticBoldTest, ResumedCompressedGlyphsMatchBatchForBothGroupLayouts) 
     }
     ASSERT_EQ(result, 0);
     EXPECT_FALSE(decompressor.isPrewarming());
+    const size_t allocations = fallibleScalarAllocations;
+    const int warmResult = decompressor.beginPrewarm(&font, "한글 본문");
+    EXPECT_EQ(fallibleScalarAllocations, allocations);
+    EXPECT_EQ(warmResult, 0);
     decompressor.resetStats();
     bitmap = decompressor.getBitmap(&font, glyph, index);
     ASSERT_NE(bitmap, nullptr);

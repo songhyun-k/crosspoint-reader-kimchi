@@ -103,6 +103,48 @@ class ChapterHtmlSlimParser {
   std::vector<std::unique_ptr<ParsedText>> tableRowCells;
   std::array<std::vector<std::shared_ptr<TextBlock>>, MAX_GRID_TABLE_COLUMNS> tableCellLines;
   std::vector<uint32_t> tableLineVisibleOffsets;
+  uint8_t tableColumnCount = 0;
+  uint8_t tableColumn = 0;
+  size_t tableLine = 0;
+  size_t tableMaxLines = 0;
+  enum class TableAction : uint8_t {
+    Prefix,
+    PrefixSoft,
+    OpenTable,
+    OpenRow,
+    OpenCell,
+    OpenHeader,
+    CloseCell,
+    CloseRow,
+    CloseTable
+  };
+  enum class TableStage : uint8_t {
+    CloseCell,
+    AfterCell,
+    PrefixTake,
+    PrefixBegin,
+    PrefixLayout,
+    StackedCellBegin,
+    StackedCellLayout,
+    PrepareRow,
+    GridCellBegin,
+    GridCellLayout,
+    GridLines,
+    FinishRow,
+    AfterRow,
+    CaptionBegin,
+    CaptionLayout,
+    AfterCaption,
+    Apply
+  };
+  TableAction tableAction = TableAction::Prefix;
+  TableStage tableStage = TableStage::Apply;
+  TableStage tableAfterPrefix = TableStage::Apply;
+  // Current tag values must outlive Expat's callback; the active cell is moved, never copied.
+  StyleStackEntry tableStartStyle;
+  uint16_t tableColumnSpan = 1;
+  uint16_t tableRowSpan = 1;
+  std::unique_ptr<ParsedText> tableActiveCell;
   bool listItemBulletOnly = false;  // true when currentTextBlock has only the <li> bullet
 
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
@@ -137,29 +179,61 @@ class ChapterHtmlSlimParser {
   // internally; the incremental section builder drives them across render ticks
   // so a large single chapter can yield between pages instead of blocking the UI
   // until the whole thing is laid out. parseFile_ and the expat parser stay alive
-  // for the lifetime of the parse so it can be paused and resumed at buffer
-  // boundaries.
+  // for the lifetime of the parse, including suspended callbacks and paragraph work.
   XML_Parser xmlParser_ = nullptr;
   HalFile parseFile_;
   uint32_t parseStartTime_ = 0;
+  enum class ParsePhase : uint8_t {
+    Xml,
+    NewBlockLayout,
+    SoftLayout,
+    Table,
+    BeforeRule,
+    Rule,
+    Image,
+    TrailingLayout,
+    TrailingPage,
+    Done,
+    Error
+  };
+  ParsePhase parsePhase_ = ParsePhase::Xml;
+  XML_Status xmlStatus_ = XML_STATUS_OK;
+  BlockStyle nextBlockStyle_;
+  ParsePhase nextBlockPhase_ = ParsePhase::Xml;
+  bool nextBlockBullet_ = false;
+  BlockStyle pendingRuleStyle_;
+  struct ImageState;
+  std::unique_ptr<ImageState> imageState_;
+  // Expat may report an empty-element end or more converted text after StopParser.
+  // Character records retain their callback boundaries (length followed by bytes).
+  std::unique_ptr<char[]> deferredText_;
+  size_t deferredTextBytes_ = 0;
+  size_t deferredTextCursor_ = 0;
+  std::unique_ptr<char[]> deferredEnd_;
 
   void updateEffectiveInlineStyle();
-  void startNewTextBlock(const BlockStyle& blockStyle);
+  void startNewTextBlock(const BlockStyle& blockStyle, ParsePhase after = ParsePhase::Xml);
+  void createTextBlock(const BlockStyle& blockStyle);
+  void pauseParse();
   void flushPendingAnchor();
   void flushPartWordBuffer();
   void fallbackTableRowToStacked();
-  void closeTableCell();
-  void finishTableRow();
+  void beginTableAction(TableAction action, const CssStyle* style = nullptr);
+  void beginStackedPrefix(TableStage after);
+  void tableSome(uint16_t maxUnits);
+  void softFlushIfNeeded();
   void addTableRowSeparator();
   void setCurrentPageVisibleOffset(uint32_t offset);
-  void makePages();
+  bool beginMakePages();
+  bool makePagesSome(uint16_t maxUnits);
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyVerticalAlignToEntry(StyleStackEntry& entry, const CssStyle& css);
-  void pushTableTextStyleEntry(const CssStyle& cssStyle);
+  void pushTableTextStyleEntry();
   void pushDecorationStyleEntry(CssTextDecoration defaultDecoration, const CssStyle& cssStyle);
   void emitHorizontalRule(const BlockStyle& blockStyle);
+  void imageSome();
   // XML callbacks
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);
   static void XMLCALL characterData(void* userData, const XML_Char* s, int len);
@@ -176,29 +250,7 @@ class ChapterHtmlSlimParser {
       const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
       const uint8_t imageRendering = 0, std::vector<std::string> tocAnchors = {},
       const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
-      const bool characterWrap = true, const bool paragraphIndent = false)
-
-      : epub(epub),
-        filepath(filepath),
-        renderer(renderer),
-        completePageFn(completePageFn),
-        popupFn(popupFn),
-        fontId(fontId),
-        lineCompression(lineCompression),
-        extraParagraphSpacing(extraParagraphSpacing),
-        paragraphAlignment(paragraphAlignment),
-        viewportWidth(viewportWidth),
-        viewportHeight(viewportHeight),
-        hyphenationEnabled(hyphenationEnabled),
-        focusReadingEnabled(focusReadingEnabled),
-        characterWrap(characterWrap),
-        paragraphIndent(paragraphIndent),
-        cssParser(cssParser),
-        embeddedStyle(embeddedStyle),
-        imageRendering(imageRendering),
-        contentBase(contentBase),
-        imageBasePath(imageBasePath),
-        tocAnchors(std::move(tocAnchors)) {}
+      const bool characterWrap = true, const bool paragraphIndent = false);
 
   ~ChapterHtmlSlimParser();
 
@@ -211,9 +263,11 @@ class ChapterHtmlSlimParser {
   // Pages are emitted via completePageFn as they complete during parseStep(), so
   // the caller can stop once enough pages are built and resume on a later tick.
   enum class ParseStatus { More, Done, Error };
+  // A stopped block retains its layout/stream workspace until returning to XML.
+  bool hasPendingBlock() const { return parsePhase_ != ParsePhase::Xml; }
   bool beginParse();
-  ParseStatus parseStep();
-  bool finishParse();  // flush the trailing page and tear down; returns true
+  ParseStatus parseStep(uint16_t maxLayoutUnits = 64);
+  bool finishParse();  // tear down after parseStep has emitted the trailing page
   void abortParse();   // tear down without flushing (error / abandon)
 
   void addLineToPage(std::shared_ptr<TextBlock> line, uint32_t visibleOffset);

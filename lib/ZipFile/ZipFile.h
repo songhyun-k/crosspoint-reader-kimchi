@@ -2,6 +2,7 @@
 #include <HalStorage.h>
 
 #include <deque>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -49,12 +50,15 @@ class ZipFile {
   bool lastCentralDirPosValid = false;
 
   bool loadFileStatSlim(const char* filename, FileStatSlim* fileStat);
+  bool readCentralDirectoryEntry(FileStatSlim& stat, char* name, size_t nameCapacity);
   long getDataOffset(const FileStatSlim& fileStat);
   bool loadZipDetails();
+  struct ReadState;
+  std::unique_ptr<ReadState> readState;
 
  public:
-  explicit ZipFile(const std::string& filePath) : filePath(filePath) {}
-  ~ZipFile() = default;
+  explicit ZipFile(const std::string& filePath);
+  ~ZipFile();
   // Zip file can be opened and closed by hand in order to allow for quick calculation of inflated file size
   // It is NOT recommended to pre-open it for any kind of inflation due to memory constraints
   bool isOpen() const { return !!file; }
@@ -73,6 +77,13 @@ class ZipFile {
   // stop (returns true) instead of a write failure — used by header probes
   // that only need the first bytes of an entry.
   bool readFileToStream(const char* filename, Print& out, size_t chunkSize, bool allowEarlyStop = false);
+  enum class ReadStatus { More, Done, Error };
+  // The archive path must outlive this ZipFile. Destruction cancels the stream.
+  // filename must remain unchanged until Done/Error or destruction.
+  // Do not run other archive operations while the stream is active.
+  // A step scans one directory entry or handles one input fill/inflate call and output chunk.
+  bool beginReadFileToStream(const char* filename, size_t chunkSize, bool allowEarlyStop = false);
+  ReadStatus readSome(Print& out);
 
   template <typename F>
   bool enumerateFilePaths(F&& callback) {

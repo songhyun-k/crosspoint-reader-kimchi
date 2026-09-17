@@ -71,6 +71,8 @@ class ParsedText {
   std::vector<bool> reorderedNoSpaceBeforeScratch;
   std::vector<uint8_t> reorderedFocusBoundaryScratch;
   std::vector<uint16_t> visualOrderScratch;
+  struct LayoutState;
+  std::unique_ptr<LayoutState> layoutState;
 
   uint32_t visibleOffsetBaseAt(size_t wordIndex) const;
   uint32_t visibleOffsetAt(size_t wordIndex) const;
@@ -81,12 +83,10 @@ class ParsedText {
   int calculateRubyExtraEndOffset(size_t lineStartIdx, size_t lineBreakIdx, const GfxRenderer& renderer,
                                   int fontId) const;
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;
-  std::vector<size_t> computeLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
-                                        std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
-                                        std::vector<bool>& noSpaceBeforeVec);
-  std::vector<size_t> computeHyphenatedLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
-                                                  std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
-                                                  std::vector<bool>& noSpaceBeforeVec);
+  void startLineBreaks(const GfxRenderer& renderer);
+  void computeLineBreaksSome(const GfxRenderer& renderer);
+  void computeHyphenatedLineBreaksSome(const GfxRenderer& renderer);
+  void adjustRubySpacing(size_t groupIndex);
   bool hyphenateWordAtIndex(size_t wordIndex, int availableWidth, const GfxRenderer& renderer, int fontId,
                             std::vector<uint16_t>& wordWidths, bool allowFallbackBreaks, bool characterBreaks = false);
   void extractLine(size_t breakIndex, int pageWidth, const std::vector<uint16_t>& wordWidths,
@@ -94,21 +94,12 @@ class ParsedText {
                    const std::vector<size_t>& lineBreakIndices,
                    const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
                    const GfxRenderer& renderer, int fontId);
-  std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId);
 
  public:
   explicit ParsedText(const bool /*extraParagraphSpacing*/, const bool hyphenationEnabled = false,
                       const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle(),
-                      const bool characterWrap = false, const bool paragraphIndent = false)
-      : blockStyle(blockStyle),
-        hyphenationEnabled(hyphenationEnabled),
-        focusReadingEnabled(focusReadingEnabled),
-        characterWrap(characterWrap),
-        paragraphIndent(paragraphIndent),
-        firstLineEmitted(blockStyle.fromBrElement),
-        isNaturalAlign(false),
-        hasRtlWord(false) {}
-  ~ParsedText() = default;
+                      const bool characterWrap = false, const bool paragraphIndent = false);
+  ~ParsedText();
 
   void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
                uint32_t visibleTextOffset = 0, uint8_t linkId = 0);
@@ -130,6 +121,11 @@ class ParsedText {
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
+  bool beginLayout(int fontId, uint16_t viewportWidth, bool includeLastLine = true);
+  // Keep this paragraph and its font context unchanged until completion or destruction.
+  // Returns true when all requested lines have been emitted and consumed.
+  bool layoutSome(const GfxRenderer& renderer,
+                  const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine, uint16_t maxUnits);
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
                              bool includeLastLine = true);

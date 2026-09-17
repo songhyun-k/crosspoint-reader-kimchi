@@ -36,7 +36,7 @@ struct tinfl_decompressor_tag;
 class InflateStream {
  public:
   enum class Status {
-    Ok,     // Output buffer full; more decompressed data remains.
+    Ok,     // More input/output work remains.
     Done,   // Stream ended cleanly. produced may be < maxLen.
     Error,  // Corrupt/truncated stream, or decompression failed.
   };
@@ -51,7 +51,8 @@ class InflateStream {
   // Allocate decompressor state (and the 32KB window when streaming) and reset
   // stream state. Reuses existing allocations on repeated calls. Returns false
   // on OOM.
-  bool init(bool streaming);
+  // A stream retained across render ticks must not borrow a scoped framebuffer loan.
+  bool init(bool streaming, bool borrowBuildScratch = true);
 
   // Free the decompressor state and window.
   void deinit();
@@ -70,7 +71,8 @@ class InflateStream {
   bool read(uint8_t* dest, size_t len);
 
   // Decompress up to maxLen bytes into dest; *produced gets the byte count.
-  Status readAtMost(uint8_t* dest, size_t maxLen, size_t* produced);
+  // A finite call budget may return Ok before filling dest, including zero bytes.
+  Status readAtMost(uint8_t* dest, size_t maxLen, size_t* produced, size_t maxInflateCalls = SIZE_MAX);
 
  private:
   tinfl_decompressor_tag* state = nullptr;  // ~11KB: heap, or inside the claimed build scratch

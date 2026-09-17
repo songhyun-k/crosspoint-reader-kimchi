@@ -1,15 +1,26 @@
 #pragma once
 
+#include <Print.h>
+
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <utility>
 
-class HalFile {
+class HalFile : public Print {
  public:
   HalFile() = default;
   ~HalFile() { close(); }
   HalFile(const HalFile&) = delete;
   HalFile& operator=(const HalFile&) = delete;
+  HalFile(HalFile&& other) noexcept : file_(std::exchange(other.file_, nullptr)) {}
+  HalFile& operator=(HalFile&& other) noexcept {
+    if (this != &other) {
+      close();
+      file_ = std::exchange(other.file_, nullptr);
+    }
+    return *this;
+  }
 
   bool open(const char* path, const char* mode) {
     close();
@@ -17,11 +28,14 @@ class HalFile {
     return file_ != nullptr;
   }
   int available() const { return file_ ? static_cast<int>(size() - position()) : 0; }
-  size_t read(void* buffer, size_t count) { return file_ ? std::fread(buffer, 1, count, file_) : 0; }
+  int read(void* buffer, size_t count) { return file_ ? static_cast<int>(std::fread(buffer, 1, count, file_)) : 0; }
   size_t write(const void* buffer, size_t count) { return file_ ? std::fwrite(buffer, 1, count, file_) : 0; }
-  size_t write(uint8_t byte) { return write(&byte, 1); }
+  size_t write(const uint8_t* buffer, size_t count) override { return write(static_cast<const void*>(buffer), count); }
+  size_t write(uint8_t byte) override { return write(&byte, 1); }
   bool flush() { return file_ && std::fflush(file_) == 0; }
   bool seekCur(size_t offset) { return file_ && std::fseek(file_, static_cast<long>(offset), SEEK_CUR) == 0; }
+  bool seekSet(size_t offset) { return file_ && std::fseek(file_, static_cast<long>(offset), SEEK_SET) == 0; }
+  bool seek(size_t offset) { return seekSet(offset); }
   bool close() {
     if (!file_) return false;
     const bool ok = std::fclose(file_) == 0;

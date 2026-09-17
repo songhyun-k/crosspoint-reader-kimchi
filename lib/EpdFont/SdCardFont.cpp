@@ -1,5 +1,6 @@
 #include "SdCardFont.h"
 
+#include <Arduino.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -42,32 +43,6 @@ constexpr uint32_t STYLE_TOC_ENTRY_SIZE = 32;
 inline uint16_t readU16(const uint8_t* p) { return p[0] | (p[1] << 8); }
 inline int16_t readI16(const uint8_t* p) { return static_cast<int16_t>(p[0] | (p[1] << 8)); }
 inline uint32_t readU32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24); }
-
-// Walks a null-terminated UTF-8 string and appends each unique codepoint to
-// codepoints[0..cpCount-1] via O(n²) dedup.  Returns true if the buffer
-// reached maxCount (cap hit), false if all codepoints fit.
-bool collectUniqueCodepoints(const char* text, uint32_t* codepoints, uint32_t& cpCount, uint32_t maxCount) {
-  const unsigned char* p = reinterpret_cast<const unsigned char*>(text);
-  while (*p) {
-    uint32_t cp = utf8NextCodepoint(&p);
-    if (cp == 0) break;
-    bool found = false;
-    for (uint32_t i = 0; i < cpCount; i++) {
-      if (codepoints[i] == cp) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      if (cpCount >= maxCount) return true;
-      codepoints[cpCount++] = cp;
-    }
-  }
-  return false;
-}
-
-const char* asCStr(const std::string& s) { return s.c_str(); }
-const char* asCStr(const char* s) { return s; }
 
 // resetStyleMiniData retention bounds (see the PerStyle comment in the header).
 constexpr size_t MINI_RETAIN_MIN_FREE_HEAP = 40 * 1024;
@@ -801,7 +776,7 @@ bool SdCardFont::beginPrewarm(TextGetter getter, const void* ctx, uint32_t textC
   // contents would otherwise extract up to MAX_PAGE_GLYPHS and fail the whole
   // arena allocation — better to load the first screens' worth and let
   // scrolling union-in the rest page by page. Per-string requests are small
-  // and already bounded by the union gate in prewarmStyle (running the check
+  // and already bounded by the union gate in preparePrewarmStyle (running the check
   // there would also log per draw call); metadata-only prewarms load no
   // bitmaps. Bytes/glyph prefers the measured average from the resident mini:
   // Hangul ink boxes run well under the advanceY-squared em estimate, which
@@ -1399,6 +1374,7 @@ void SdCardFont::mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sor
   uint32_t i = 0, j = 0, k = 0;
   while (k < mergedCap && (i < oldSize || j < newCount)) {
     if (i < oldSize && (j >= newCount || a[i].codepoint <= b[j].codepoint)) {
+      if (j < newCount && a[i].codepoint == b[j].codepoint) ++j;
       merged[k++] = a[i++];
     } else {
       merged[k++] = b[j++];
@@ -1462,171 +1438,295 @@ uint16_t SdCardFont::getAdvanceOrLoad(uint32_t codepoint, uint8_t style) const {
   return glyph.advanceX;
 }
 
-// Given a sorted array of unique codepoints, resolve glyph indices per style,
-// batch-read advanceX from SD, and merge into the persistent advance table.
-// Caller owns the codepoints buffer.
-int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCount, uint8_t styleMask) {
-  int totalMissed = 0;
-  for (uint8_t si = 0; si < MAX_STYLES; si++) {
-    if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
-    const auto& s = styles_[si];
+struct SdCardFont::AdvancePreparation::State {
+  enum class Phase : uint8_t { Measure, Collect, Extras, Style, Missing, Map, Open, Read, Publish };
+  struct Mapping {
+    uint32_t codepoint;
+    int32_t glyphIndex;
+  };
+  static constexpr uint32_t MAX_CODEPOINTS = 4096;
+  SdCardFont& font;
+  TextGetter getter = nullptr;
+  const void* context = nullptr;
+  const unsigned char* cursor = nullptr;
+  const char* extraText = nullptr;
+  std::string ownedExtraText;
+  std::unique_ptr<uint32_t[]> codepoints;
+  std::unique_ptr<Mapping[]> mappings;
+  std::unique_ptr<AdvanceEntry[]> staged;
+  HalFile file;
+  Phase phase = Phase::Measure;
+  uint32_t capacity = 0;
+  uint32_t textCount = 0;
+  uint32_t textIndex = 0;
+  uint32_t codepointCount = 0;
+  uint32_t index = 0;
+  uint32_t missing = 0;
+  uint32_t needed = 0;
+  uint32_t fetched = 0;
+  int32_t replacementIndex = -1;
+  int32_t lastReadIndex = INT32_MIN;
+  unsigned long startedAt = 0;
+  int missed = 0;
+  uint8_t style = 0;
+  uint8_t styleMask = 0;
+  bool includeSpace = false;
+  bool includeHyphen = false;
+  bool replaceCache = false;
 
-    // Keep repeated/subset requests warm, but never freeze the cache at the
-    // first 768 characters in a book. Replace with the current paragraph when
-    // its missing entries no longer fit alongside the old set.
-    uint32_t missing = 0;
-    for (uint32_t i = 0; i < cpCount; ++i) {
-      if (!advanceTableLookup(si, codepoints[i], nullptr)) ++missing;
-    }
-    if (missing == 0) continue;
-    const bool replaceCache = advanceTableSize_[si] + missing > ADVANCE_CACHE_LIMIT;
-
-    // For each codepoint in `codepoints`, skip those already cached, then
-    // resolve to a glyph index. Build a parallel array sorted by glyph index
-    // for sequential SD reads.
-    struct CpIdx {
-      uint32_t codepoint;
-      int32_t glyphIndex;
-    };
-    std::unique_ptr<CpIdx[]> mappings(new (std::nothrow) CpIdx[cpCount]);
-    if (!mappings) {
-      LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate mappings for style %u", si);
-      totalMissed += cpCount;
-      continue;
-    }
-
-    uint32_t needCount = 0;
-    uint32_t missedThisStyle = 0;
-    const int32_t replacementIdx = findGlobalGlyphIndex(s, REPLACEMENT_GLYPH);
-    for (uint32_t i = 0; i < cpCount; i++) {
-      const uint32_t cp = codepoints[i];
-      if (!replaceCache && advanceTableLookup(si, cp, nullptr)) continue;
-      int32_t idx = findGlobalGlyphIndex(s, cp);
-      if (idx < 0) {
-        if (replacementIdx < 0) {
-          missedThisStyle++;
-          continue;
-        }
-        idx = replacementIdx;
-      }
-      mappings[needCount].codepoint = cp;
-      mappings[needCount].glyphIndex = idx;
-      needCount++;
-    }
-    totalMissed += static_cast<int>(missedThisStyle);
-
-    if (needCount == 0) continue;
-
-    // Sort by glyph index so SD reads are mostly sequential.
-    std::sort(mappings.get(), mappings.get() + needCount,
-              [](const CpIdx& a, const CpIdx& b) { return a.glyphIndex < b.glyphIndex; });
-
-    // Open file once and read advanceX for each needed glyph.
-    HalFile file;
-    if (!Storage.openFileForRead("SDCF", filePath_, file)) {
-      LOG_ERR("SDCF", "buildAdvanceTable: failed to open .cpfont for style %u", si);
-      continue;
-    }
-
-    std::unique_ptr<AdvanceEntry[]> staged(new (std::nothrow) AdvanceEntry[needCount]);
-    if (!staged) {
-      LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate staging for style %u", si);
-      file.close();
-      continue;
-    }
-
-    uint32_t fetched = 0;
-    EpdGlyph tempGlyph;
-    int32_t lastReadIndex = INT32_MIN;
-    for (uint32_t i = 0; i < needCount; i++) {
-      int32_t gIdx = mappings[i].glyphIndex;
-      uint32_t fileOff = s.glyphsFileOffset + static_cast<uint32_t>(gIdx) * sizeof(EpdGlyph);
-      if (gIdx != lastReadIndex + 1) {
-        if (!file.seekSet(fileOff)) {
-          LOG_ERR("SDCF", "buildAdvanceTable: failed to seek to glyph %d (style %u)", gIdx, si);
-          break;
-        }
-      }
-      if (file.read(reinterpret_cast<uint8_t*>(&tempGlyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
-        LOG_ERR("SDCF", "buildAdvanceTable: short glyph read (style %u, glyph %d)", si, gIdx);
-        break;
-      }
-      lastReadIndex = gIdx;
-      staged[fetched].codepoint = mappings[i].codepoint;
-      staged[fetched].advanceX = tempGlyph.advanceX;
-      fetched++;
-    }
-    file.close();
-
-    if (fetched > 0) {
-      // Sort staged by codepoint, then merge into the persistent table.
-      std::sort(staged.get(), staged.get() + fetched,
-                [](const AdvanceEntry& a, const AdvanceEntry& b) { return a.codepoint < b.codepoint; });
-      if (replaceCache) {
-        // Do not evict usable entries until the replacement reads succeeded.
-        delete[] advanceTable_[si];
-        advanceTable_[si] = nullptr;
-        advanceTableSize_[si] = 0;
-      }
-      mergeIntoAdvanceTable(si, staged.get(), fetched);
-    }
-
-    LOG_DBG("SDCF", "Advance table style %u: +%u from SD, total=%u/%u", si, fetched, advanceTableSize_[si],
-            ADVANCE_CACHE_LIMIT);
+  explicit State(SdCardFont& font) : font(font) {}
+  void nextStyle() {
+    file = HalFile{};
+    mappings.reset();
+    staged.reset();
+    ++style;
+    phase = Phase::Style;
   }
+};
 
-  return totalMissed;
+SdCardFont::AdvancePreparation::AdvancePreparation() = default;
+SdCardFont::AdvancePreparation::~AdvancePreparation() = default;
+SdCardFont::AdvancePreparation::AdvancePreparation(AdvancePreparation&&) noexcept = default;
+SdCardFont::AdvancePreparation& SdCardFont::AdvancePreparation::operator=(AdvancePreparation&&) noexcept = default;
+
+SdCardFont::AdvancePreparation SdCardFont::startAdvances(TextGetter getter, const void* ctx, uint32_t textCount,
+                                                         bool includeSpace, bool includeHyphen, uint8_t styleMask,
+                                                         const char* extraText) {
+  AdvancePreparation operation;
+  if (!loaded_) {
+    LOG_ERR("SDCF", "Advance preparation requires a loaded font");
+    operation.result = -1;
+    return operation;
+  }
+  styleMask = resolveStyleMask(styleMask);
+  if (styleMask == 0) return operation;
+  // Retain the same batch scratch/file across returns; the caller owns their lifetime.
+  auto work = makeUniqueNoThrow<AdvancePreparation::State>(*this);
+  if (!work) {
+    LOG_ERR("SDCF", "Failed to allocate advance preparation scratch");
+    operation.result = -1;
+    return operation;
+  }
+  work->getter = getter;
+  work->context = ctx;
+  work->textCount = textCount;
+  work->extraText = extraText;
+  work->includeSpace = includeSpace;
+  work->includeHyphen = includeHyphen;
+  work->styleMask = styleMask;
+  work->startedAt = millis();
+  operation.state = std::move(work);
+  return operation;
 }
 
-template <typename Iter>
-int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, bool includeHyphen, uint8_t styleMask,
-                                       const char* extraText) {
-  if (!loaded_) return -1;
-  styleMask = resolveStyleMask(styleMask);
-  if (styleMask == 0) return 0;
-
-  unsigned long startMs = millis();
-
-  // +2 reserved slots for space and hyphen injected after the main scan.
-  static constexpr uint32_t MAX_UNIQUE_CODEPOINTS = 4096;
-  uint32_t* codepoints = new (std::nothrow) uint32_t[MAX_UNIQUE_CODEPOINTS + 2];
-  if (!codepoints) {
-    LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate codepoint buffer (%u bytes)", MAX_UNIQUE_CODEPOINTS * 4);
-    return -1;
+int SdCardFont::AdvancePreparation::prepareSome(uint16_t maxUnits) {
+  if (!state) return result;
+  auto& work = *state;
+  auto& font = work.font;
+  using Phase = State::Phase;
+  while (maxUnits-- != 0) {
+    switch (work.phase) {
+      case Phase::Measure: {
+        const char* text = nullptr;
+        if (work.capacity < State::MAX_CODEPOINTS && work.textIndex < work.textCount) {
+          text = work.getter(work.context, work.textIndex++);
+        } else if (work.capacity < State::MAX_CODEPOINTS && work.textIndex == work.textCount) {
+          text = work.extraText;
+          ++work.textIndex;
+        } else {
+          // Each UTF-8 byte can contribute at most one codepoint. Saturation
+          // preserves the existing unique-codepoint cap without overallocating short text.
+          work.capacity += work.includeSpace + work.includeHyphen;
+          if (work.capacity == 0) {
+            state.reset();
+            return result;
+          }
+          work.codepoints = makeUniqueNoThrowForOverwrite<uint32_t[]>(work.capacity);
+          if (!work.codepoints) {
+            LOG_ERR("SDCF", "Failed to allocate advance preparation scratch");
+            state.reset();
+            return result = -1;
+          }
+          work.textIndex = 0;
+          work.phase = Phase::Collect;
+          break;
+        }
+        if (text) work.capacity += strnlen(text, State::MAX_CODEPOINTS - work.capacity);
+        break;
+      }
+      case Phase::Collect: {
+        if (!work.cursor || *work.cursor == '\0') {
+          if (work.textIndex < work.textCount) {
+            work.cursor = reinterpret_cast<const unsigned char*>(work.getter(work.context, work.textIndex++));
+          } else if (work.textIndex == work.textCount) {
+            ++work.textIndex;
+            work.cursor = reinterpret_cast<const unsigned char*>(work.extraText);
+          } else {
+            work.phase = Phase::Extras;
+            break;
+          }
+          if (!work.cursor || *work.cursor == '\0') break;
+        }
+        const uint32_t cp = utf8NextCodepoint(&work.cursor);
+        if (cp == 0) {
+          work.cursor = nullptr;
+          break;
+        }
+        auto* end = work.codepoints.get() + work.codepointCount;
+        if (std::find(work.codepoints.get(), end, cp) != end) break;
+        if (work.codepointCount == State::MAX_CODEPOINTS) {
+          LOG_ERR("SDCF", "buildAdvanceTable: unique codepoint cap (%u) hit, layout may be approximate",
+                  State::MAX_CODEPOINTS);
+          work.phase = Phase::Extras;
+        } else {
+          work.codepoints[work.codepointCount++] = cp;
+        }
+        break;
+      }
+      case Phase::Extras: {
+        auto* const begin = work.codepoints.get();
+        if (work.includeSpace && std::find(begin, begin + work.codepointCount, ' ') == begin + work.codepointCount)
+          work.codepoints[work.codepointCount++] = ' ';
+        if (work.includeHyphen && std::find(begin, begin + work.codepointCount, '-') == begin + work.codepointCount)
+          work.codepoints[work.codepointCount++] = '-';
+        std::sort(begin, begin + work.codepointCount);
+        work.phase = Phase::Style;
+        break;
+      }
+      case Phase::Style:
+        if (work.style == MAX_STYLES) {
+          result = work.missed;
+          font.stats_.prewarmTotalMs = millis() - work.startedAt;
+          state.reset();
+          return result;
+        }
+        if (!(work.styleMask & (1 << work.style)) || !font.styles_[work.style].present) {
+          ++work.style;
+          break;
+        }
+        work.index = work.missing = work.needed = work.fetched = 0;
+        work.phase = Phase::Missing;
+        break;
+      case Phase::Missing:
+        if (work.index < work.codepointCount) {
+          if (!font.advanceTableLookup(work.style, work.codepoints[work.index++], nullptr)) ++work.missing;
+        } else if (work.missing == 0) {
+          work.nextStyle();
+        } else {
+          work.replaceCache = font.advanceTableSize_[work.style] + work.missing > ADVANCE_CACHE_LIMIT;
+          work.mappings = makeUniqueNoThrowForOverwrite<State::Mapping[]>(work.codepointCount);
+          if (!work.mappings) {
+            LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate mappings for style %u", work.style);
+            work.missed += work.codepointCount;
+            work.nextStyle();
+            break;
+          }
+          work.replacementIndex = font.findGlobalGlyphIndex(font.styles_[work.style], REPLACEMENT_GLYPH);
+          work.index = 0;
+          work.phase = Phase::Map;
+        }
+        break;
+      case Phase::Map:
+        if (work.index < work.codepointCount) {
+          const uint32_t cp = work.codepoints[work.index++];
+          if (!work.replaceCache && font.advanceTableLookup(work.style, cp, nullptr)) break;
+          int32_t index = font.findGlobalGlyphIndex(font.styles_[work.style], cp);
+          if (index < 0) index = work.replacementIndex;
+          if (index < 0)
+            ++work.missed;
+          else
+            work.mappings[work.needed++] = {cp, index};
+        } else {
+          work.phase = Phase::Open;
+        }
+        break;
+      case Phase::Open:
+        if (work.needed == 0) {
+          work.nextStyle();
+          break;
+        }
+        std::sort(work.mappings.get(), work.mappings.get() + work.needed,
+                  [](const State::Mapping& a, const State::Mapping& b) { return a.glyphIndex < b.glyphIndex; });
+        if (!Storage.openFileForRead("SDCF", font.filePath_, work.file)) {
+          LOG_ERR("SDCF", "buildAdvanceTable: failed to open .cpfont for style %u", work.style);
+          work.nextStyle();
+          break;
+        }
+        work.staged = makeUniqueNoThrowForOverwrite<AdvanceEntry[]>(work.needed);
+        if (!work.staged) {
+          LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate staging for style %u", work.style);
+          work.nextStyle();
+          break;
+        }
+        work.lastReadIndex = INT32_MIN;
+        work.index = 0;
+        work.phase = Phase::Read;
+        break;
+      case Phase::Read: {
+        const auto& mapping = work.mappings[work.index++];
+        const auto& style = font.styles_[work.style];
+        const uint32_t offset = style.glyphsFileOffset + static_cast<uint32_t>(mapping.glyphIndex) * sizeof(EpdGlyph);
+        EpdGlyph glyph;
+        if (mapping.glyphIndex != work.lastReadIndex + 1 && !work.file.seekSet(offset)) {
+          LOG_ERR("SDCF", "buildAdvanceTable: failed to seek to glyph %d (style %u)", mapping.glyphIndex, work.style);
+          work.phase = Phase::Publish;
+          break;
+        }
+        if (work.file.read(&glyph, sizeof(glyph)) != sizeof(glyph)) {
+          LOG_ERR("SDCF", "buildAdvanceTable: short glyph read (style %u, glyph %d)", work.style, mapping.glyphIndex);
+          work.phase = Phase::Publish;
+          break;
+        }
+        work.lastReadIndex = mapping.glyphIndex;
+        work.staged[work.fetched++] = {mapping.codepoint, glyph.advanceX};
+        if (work.index == work.needed) work.phase = Phase::Publish;
+        break;
+      }
+      case Phase::Publish:
+        if (work.fetched > 0) {
+          std::sort(work.staged.get(), work.staged.get() + work.fetched,
+                    [](const AdvanceEntry& a, const AdvanceEntry& b) { return a.codepoint < b.codepoint; });
+          if (work.replaceCache) {
+            delete[] font.advanceTable_[work.style];
+            font.advanceTable_[work.style] = nullptr;
+            font.advanceTableSize_[work.style] = 0;
+          }
+          font.mergeIntoAdvanceTable(work.style, work.staged.get(), work.fetched);
+        }
+        LOG_DBG("SDCF", "Advance table style %u: +%u from SD, total=%u/%u", work.style, work.fetched,
+                font.advanceTableSize_[work.style], ADVANCE_CACHE_LIMIT);
+        work.nextStyle();
+        break;
+    }
   }
-  uint32_t cpCount = 0;
-  bool hitCap = false;
+  return PENDING;
+}
 
-  for (auto it = begin; it != end && !hitCap; ++it) {
-    hitCap = collectUniqueCodepoints(asCStr(*it), codepoints, cpCount, MAX_UNIQUE_CODEPOINTS);
-  }
-  if (extraText && !hitCap) {
-    hitCap = collectUniqueCodepoints(extraText, codepoints, cpCount, MAX_UNIQUE_CODEPOINTS);
-  }
+namespace {
+const char* advanceWordGetter(const void* ctx, const uint32_t index) {
+  return (*static_cast<const std::deque<std::string>*>(ctx))[index].c_str();
+}
+}  // namespace
 
-  if (includeSpace && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == ' '; }))
-    codepoints[cpCount++] = ' ';
-  if (includeHyphen && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == '-'; }))
-    codepoints[cpCount++] = '-';
-
-  if (hitCap) {
-    LOG_ERR("SDCF", "buildAdvanceTable: unique codepoint cap (%u) hit, layout may be approximate",
-            MAX_UNIQUE_CODEPOINTS);
+SdCardFont::AdvancePreparation SdCardFont::beginAdvanceTable(const std::deque<std::string>& words,
+                                                             const bool includeHyphen, const uint8_t styleMask,
+                                                             std::string extraText) {
+  auto operation =
+      startAdvances(advanceWordGetter, &words, words.size(), words.size() > 1, includeHyphen, styleMask, nullptr);
+  if (operation.state) {
+    operation.state->ownedExtraText = std::move(extraText);
+    operation.state->extraText = operation.state->ownedExtraText.c_str();
   }
-  std::sort(codepoints, codepoints + cpCount);
-  int totalMissed = fetchAdvancesForCodepoints(codepoints, cpCount, styleMask);
-  delete[] codepoints;
-  stats_.prewarmTotalMs = millis() - startMs;
-  return totalMissed;
+  return operation;
 }
 
 int SdCardFont::buildAdvanceTable(const char* utf8Text, uint8_t styleMask, const char* extraText) {
-  return buildAdvanceTableRange(&utf8Text, &utf8Text + 1, false, false, styleMask, extraText);
-}
-
-int SdCardFont::buildAdvanceTable(const std::deque<std::string>& words, bool includeHyphen, uint8_t styleMask,
-                                  const char* extraText) {
-  return buildAdvanceTableRange(words.begin(), words.end(), words.size() > 1, includeHyphen, styleMask, extraText);
+  auto operation = startAdvances(singleTextGetter, utf8Text, 1, false, false, styleMask, extraText);
+  int result;
+  do {
+    result = operation.prepareSome(UINT16_MAX);
+  } while (result == AdvancePreparation::PENDING);
+  return result;
 }
 
 // --- Stats ---

@@ -1,11 +1,13 @@
 #include "Section.h"
 
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <Serialization.h>
+#include <ZipFile.h>
 
 #include "Epub/css/CssParser.h"
 #include "Page.h"
@@ -289,107 +291,94 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
     }
   }
 
-  const auto localPath = epub->getSpineItem(spineIndex).href;
-  const auto htmlDir = epub->getCachePath() + "/html";
-  const auto htmlPath = htmlDir + "/" + std::to_string(spineIndex) + ".html";
-  const auto tmpHtmlPath = htmlDir + "/.tmp_" + std::to_string(spineIndex) + ".html";
-
-  // Create cache directory if it doesn't exist
-  {
-    const auto sectionsDir = epub->getCachePath() + "/sections";
-    Storage.mkdir(sectionsDir.c_str());
+  build_ = makeUniqueNoThrow<BuildContext>();
+  if (!build_) {
+    LOG_ERR("SCT", "OOM: BuildContext");
+    return false;
   }
-
-  // Reuse the previously unzipped HTML if we already have it. The unzipped HTML is keyed only on the
-  // book (it lives in the per-book cache dir), not on render settings, so it survives the invalidation
-  // that wipes the layout (.bin) caches when font/margin/orientation change -- rebuilds then skip zip
-  // inflation entirely. It's promoted by an atomic rename as soon as the inflate succeeds (below), so
-  // even a window-only giant spine -- whose .bin never finalizes -- still caches its HTML, letting a
-  // reopen skip the multi-second inflate. If htmlPath exists it is known-complete.
-  const bool reusedHtml = Storage.exists(htmlPath.c_str());
-  bool htmlCached = reusedHtml;
-  if (reusedHtml) {
-    LOG_DBG("SCT", "Reusing cached HTML %s", htmlPath.c_str());
-  } else {
-    Storage.mkdir(htmlDir.c_str());
-
-    // Retry logic for SD card timing issues
-    bool streamed = false;
-    uint32_t fileSize = 0;
-    for (int attempt = 0; attempt < 3 && !streamed; attempt++) {
-      if (attempt > 0) {
-        LOG_DBG("SCT", "Retrying stream (attempt %d)...", attempt + 1);
-        delay(50);  // Brief delay before retry
-      }
-
-      // Remove any incomplete file from previous attempt before retrying
-      if (Storage.exists(tmpHtmlPath.c_str())) {
-        Storage.remove(tmpHtmlPath.c_str());
-      }
-
-      HalFile tmpHtml;
-      if (!Storage.openFileForWrite("SCT", tmpHtmlPath, tmpHtml)) {
-        continue;
-      }
-      // Larger chunks mean far fewer SD writes inflating the HTML; a 1KB chunk turned a 584KB
-      // single-spine novel into ~570 tiny writes (multi-second). 8KB keeps the transient buffers
-      // small while cutting the write count 8x.
-      streamed = epub->readItemContentsToStream(localPath, tmpHtml, 8192);
-      fileSize = tmpHtml.size();
-      // Explicitly close() file before calling Storage.remove()
-      tmpHtml.close();
-
-      // If streaming failed, remove the incomplete file immediately
-      if (!streamed && Storage.exists(tmpHtmlPath.c_str())) {
-        Storage.remove(tmpHtmlPath.c_str());
-        LOG_DBG("SCT", "Removed incomplete temp file after failed attempt");
-      }
-    }
-
-    if (!streamed) {
-      LOG_ERR("SCT", "Failed to stream item contents to temp file after retries");
+  auto& work = *build_;
+  work.spec = spec;
+  work.popupFn = popupFn;
+  const auto localPath = epub->getSpineItem(spineIndex).href;
+  work.sourcePath = FsHelpers::normalisePath(localPath);
+  const auto htmlDir = epub->getCachePath() + "/html";
+  work.htmlPath = htmlDir + "/" + std::to_string(spineIndex) + ".html";
+  work.tmpHtmlPath = htmlDir + "/.tmp_" + std::to_string(spineIndex) + ".html";
+  const auto sectionsDir = epub->getCachePath() + "/sections";
+  Storage.mkdir(sectionsDir.c_str());
+  work.reusedHtml = Storage.exists(work.htmlPath.c_str());
+  work.parsePath = work.reusedHtml ? work.htmlPath : work.tmpHtmlPath;
+  const size_t lastSlash = localPath.find_last_of('/');
+  work.contentBase = lastSlash == std::string::npos ? "" : localPath.substr(0, lastSlash + 1);
+  work.imageBasePath = epub->getCachePath() + "/img_" + std::to_string(spineIndex) + "_";
+  if (work.reusedHtml) {
+    LOG_DBG("SCT", "Reusing cached HTML %s", work.htmlPath.c_str());
+    if (!beginLayout()) {
+      suspendBuild();
       return false;
     }
+  } else {
+    Storage.mkdir(htmlDir.c_str());
+    work.phase = BuildContext::Phase::ExtractBegin;
+  }
+  return true;
+}
 
-    LOG_DBG("SCT", "Streamed temp HTML to %s (%d bytes)", tmpHtmlPath.c_str(), fileSize);
-
-    // Promote to the persistent HTML cache immediately -- the inflate is complete and the bytes are
-    // valid regardless of whether the layout build finishes, so reopening (even a window-only spine
-    // that never finalizes its .bin) skips re-inflation. If the rename fails we just parse the temp.
-    if (Storage.rename(tmpHtmlPath.c_str(), htmlPath.c_str())) {
-      htmlCached = true;
-    } else {
-      LOG_DBG("SCT", "Failed to promote HTML cache; parsing from temp");
+bool Section::extractHtmlSome(const bool drain) {
+  auto& work = *build_;
+  const auto retry = [&work]() {
+    work.htmlStream.reset();
+    work.htmlOutput = HalFile{};
+    Storage.remove(work.tmpHtmlPath.c_str());
+    if (work.extractAttempts == 3) {
+      LOG_ERR("SCT", "Failed to extract HTML after retries");
+      return false;
     }
+    work.phase = BuildContext::Phase::ExtractBegin;
+    return true;
+  };
+  ZipFile::ReadStatus status;
+  if (work.phase == BuildContext::Phase::ExtractBegin) {
+    if (work.extractAttempts > 0) delay(50);
+    ++work.extractAttempts;
+    work.htmlStream = makeUniqueNoThrow<ZipFile>(epub->getPath());
+    if (!work.htmlStream || !Storage.openFileForWrite("SCT", work.tmpHtmlPath, work.htmlOutput)) {
+      LOG_ERR("SCT", "Failed to start HTML extraction");
+      return retry();
+    }
+    if (drain) {
+      // The complete-build call retains its caller's framebuffer loan until this drain returns.
+      status = work.htmlStream->readFileToStream(work.sourcePath.c_str(), work.htmlOutput, 8192)
+                   ? ZipFile::ReadStatus::Done
+                   : ZipFile::ReadStatus::Error;
+    } else {
+      if (!work.htmlStream->beginReadFileToStream(work.sourcePath.c_str(), 8192)) return retry();
+      work.phase = BuildContext::Phase::Extract;
+      return true;
+    }
+  } else {
+    status = work.htmlStream->readSome(work.htmlOutput);
   }
+  if (status == ZipFile::ReadStatus::More) return true;
+  if (status == ZipFile::ReadStatus::Error) return retry();
+  work.htmlStream.reset();
+  work.htmlOutput = HalFile{};
+  // Only a complete extracted file is visible at the persistent cache path.
+  work.reusedHtml = Storage.rename(work.tmpHtmlPath.c_str(), work.htmlPath.c_str());
+  work.parsePath = work.reusedHtml ? work.htmlPath : work.tmpHtmlPath;
+  if (!work.reusedHtml) LOG_DBG("SCT", "Failed to promote HTML cache; parsing from temp");
+  work.phase = BuildContext::Phase::StartParse;
+  return true;
+}
 
-  if (!Storage.openFileForWrite("SCT", binTmpPath(), file)) {
-    if (!reusedHtml) Storage.remove(tmpHtmlPath.c_str());
-    return false;
-  }
-  // Header is written with the incomplete-version sentinel; finalizeBuild() commits it.
+bool Section::beginLayout() {
+  auto* ctx = build_.get();
+  const auto& spec = ctx->spec;
+  const auto& popupFn = ctx->popupFn;
+  ctx->phase = BuildContext::Phase::Parse;
+  std::string{}.swap(ctx->sourcePath);
+  if (!Storage.openFileForWrite("SCT", binTmpPath(), file)) return false;
   writeSectionFileHeader(spec);
-
-  auto ctx = makeUniqueNoThrow<BuildContext>();
-  if (!ctx) {
-    LOG_ERR("SCT", "OOM: BuildContext");
-    file.close();
-    Storage.remove(binTmpPath().c_str());
-    if (!reusedHtml) Storage.remove(tmpHtmlPath.c_str());
-    return false;
-  }
-  // htmlCached == "htmlPath is the live cache" (reused, or just promoted). finalizeBuild/abandonBuild
-  // then leave the cached HTML alone; only an un-promoted temp (rename failed) is theirs to clean up.
-  ctx->reusedHtml = htmlCached;
-  ctx->htmlPath = htmlPath;
-  ctx->tmpHtmlPath = tmpHtmlPath;
-  ctx->parsePath = htmlCached ? htmlPath : tmpHtmlPath;
-
-  // Derive the content base directory and image cache path prefix for the parser
-  const size_t lastSlash = localPath.find_last_of('/');
-  ctx->contentBase = (lastSlash != std::string::npos) ? localPath.substr(0, lastSlash + 1) : "";
-  ctx->imageBasePath = epub->getCachePath() + "/img_" + std::to_string(spineIndex) + "_";
-
   if (spec.embeddedStyle) {
     ctx->cssParser = epub->getCssParser();
     if (ctx->cssParser) {
@@ -397,9 +386,6 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
       if (cacheResult == CssParser::CacheLoadResult::LowMemory) {
         LOG_ERR("SCT", "Insufficient heap to hydrate CSS; section build deferred");
         ctx->cssParser->clear();
-        file.close();
-        Storage.remove(binTmpPath().c_str());
-        if (!ctx->reusedHtml) Storage.remove(ctx->tmpHtmlPath.c_str());
         return false;
       }
       if (cacheResult == CssParser::CacheLoadResult::Invalid) {
@@ -425,7 +411,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   // live in the BuildContext (which outlives the parser). The page-complete callback
   // captures the BuildContext pointer to append to its in-RAM LUT; build_ owns the
   // context for the parser's whole lifetime.
-  BuildContext* ctxPtr = ctx.get();
+  BuildContext* ctxPtr = ctx;
   ctx->parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
       epub, ctxPtr->parsePath, renderer, spec.fontId, spec.lineCompression, spec.extraParagraphSpacing,
       spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled,
@@ -439,27 +425,34 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
       popupFn, ctxPtr->cssParser, spec.characterWrap, spec.paragraphIndent);
   if (!ctx->parser) {
     LOG_ERR("SCT", "OOM: ChapterHtmlSlimParser");
-    if (ctx->cssParser) ctx->cssParser->clear();
-    file.close();
-    Storage.remove(binTmpPath().c_str());
-    if (!reusedHtml) Storage.remove(tmpHtmlPath.c_str());
     return false;
   }
 
+  ctx->popupFn = nullptr;
   Hyphenator::setPreferredLanguage(epub->getLanguage());
-  build_ = std::move(ctx);
-
-  if (!build_->parser->beginParse()) {
+  if (!ctx->parser->beginParse()) {
     LOG_ERR("SCT", "Failed to begin parse");
-    abandonBuild();
     return false;
   }
-  build_->totalBytes = build_->parser->parseTotalBytes();
+  ctx->totalBytes = ctx->parser->parseTotalBytes();
   return true;
 }
 
+bool Section::hasRetainedBuildOperation() const {
+  if (!build_) return false;
+  switch (build_->phase) {
+    case BuildContext::Phase::ExtractBegin:
+    case BuildContext::Phase::StartParse:
+      return false;
+    case BuildContext::Phase::Parse:
+      return build_->parser->hasPendingBlock();
+    default:
+      return true;
+  }
+}
+
 bool Section::buildSomeMore(const int maxPages, const int maxParseSteps) {
-  if (!build_ || !build_->parser) {
+  if (!build_) {
     LOG_ERR("SCT", "buildSomeMore with no active build");
     return false;
   }
@@ -468,19 +461,32 @@ bool Section::buildSomeMore(const int maxPages, const int maxParseSteps) {
   // would otherwise turn one "small" chunk into a blocking rebuild of the whole watermark.
   const int startCount = builtPageCount_;
   for (int steps = 0;; ++steps) {
-    const auto status = build_->parser->parseStep();
-    if (status == ChapterHtmlSlimParser::ParseStatus::Error) {
-      LOG_ERR("SCT", "Parse error during incremental build");
-      abandonBuild();
-      return false;
+    if (build_->phase == BuildContext::Phase::ExtractBegin || build_->phase == BuildContext::Phase::Extract) {
+      if (!extractHtmlSome(maxPages <= 0 && maxParseSteps <= 0)) {
+        suspendBuild();
+        return false;
+      }
+    } else if (build_->phase == BuildContext::Phase::StartParse) {
+      if (!beginLayout()) {
+        suspendBuild();
+        return false;
+      }
+    } else if (build_->phase != BuildContext::Phase::Parse) {
+      if (!finalizeBuild()) return false;
+    } else {
+      const auto status = build_->parser->parseStep();
+      if (status == ChapterHtmlSlimParser::ParseStatus::Error) {
+        LOG_ERR("SCT", "Parse error during incremental build");
+        abandonBuild();
+        return false;
+      }
+      if (status == ChapterHtmlSlimParser::ParseStatus::Done && !finalizeBuild()) return false;
     }
-    if (status == ChapterHtmlSlimParser::ParseStatus::Done) {
-      return finalizeBuild();
-    }
+    if (!build_) return true;
     // ParseStatus::More: yield once we've laid out the requested number of pages.
     if ((maxPages > 0 && (builtPageCount_ - startCount) >= maxPages) ||
         (maxParseSteps > 0 && steps + 1 >= maxParseSteps)) {
-      build_->bytesConsumed = build_->parser->parseBytesConsumed();
+      if (build_->parser) build_->bytesConsumed = build_->parser->parseBytesConsumed();
       return true;
     }
   }
@@ -556,111 +562,174 @@ uint16_t Section::estimatedTotalPages() const {
 // (bytesConsumed, totalBytes) is appended after the li LUT so a later open can estimate
 // the total page count. The parser must still be alive (anchors are read from it).
 // On failure the tmp is removed and any pre-existing file at filePath is left intact.
-bool Section::commitBuildFile(const uint8_t version, const uint32_t bytesConsumed, const uint32_t totalBytes) {
-  const bool asPartial = (version == SECTION_FILE_PARTIAL_VERSION);
+void Section::beginCommit(const uint8_t version) {
+  build_->phase = BuildContext::Phase::PageLut;
+  build_->commitCursor = 0;
+  build_->anchorCount = 0;
+  build_->commitVersion = version;
+  build_->tableOffsets[0] = file.position();
+}
 
+Section::CommitStatus Section::commitSome(uint16_t maxUnits) {
+  auto& work = *build_;
+  using Phase = BuildContext::Phase;
+  const bool asPartial = work.commitVersion == SECTION_FILE_PARTIAL_VERSION;
+  const auto& anchors = work.parser->getAnchors();
   const auto failCommit = [this]() {
-    // Explicit close() required before remove (member variable, O_RDWR handle).
-    file.close();
+    LOG_ERR("SCT", "Failed to commit section tables");
+    file = HalFile{};
     Storage.remove(binTmpPath().c_str());
-    return false;
+    return CommitStatus::Error;
   };
 
-  const uint32_t lutOffset = file.position();
-  for (const auto& entry : build_->lut) {
-    if (entry.fileOffset == 0) {
-      LOG_ERR("SCT", "Failed to write LUT due to invalid page positions");
-      return failCommit();
+  while (maxUnits-- != 0) {
+    size_t expectedPosition = file.position();
+    switch (work.phase) {
+      case Phase::PageLut:
+        if (work.commitCursor < work.lut.size()) {
+          const auto offset = work.lut[work.commitCursor++].fileOffset;
+          if (offset == 0) return failCommit();
+          serialization::writePod(file, offset);
+          expectedPosition += sizeof(offset);
+        } else {
+          work.tableOffsets[1] = file.position();
+          work.commitCursor = 0;
+          work.phase = Phase::CountAnchors;
+        }
+        break;
+      case Phase::CountAnchors:
+        if (work.commitCursor < anchors.size()) {
+          if (!asPartial || anchors[work.commitCursor].second < builtPageCount_) ++work.anchorCount;
+          ++work.commitCursor;
+        } else {
+          serialization::writePod(file, work.anchorCount);
+          expectedPosition += sizeof(work.anchorCount);
+          work.commitCursor = 0;
+          work.phase = Phase::Anchors;
+        }
+        break;
+      case Phase::Anchors:
+        if (work.commitCursor < anchors.size()) {
+          const auto& [anchor, page] = anchors[work.commitCursor++];
+          if (!asPartial || page < builtPageCount_) {
+            serialization::writeString(file, anchor);
+            serialization::writePod(file, page);
+            expectedPosition += sizeof(uint32_t) + anchor.size() + sizeof(page);
+          }
+        } else {
+          work.tableOffsets[2] = file.position();
+          serialization::writePod(file, static_cast<uint16_t>(work.lut.size()));
+          expectedPosition += sizeof(uint16_t);
+          work.commitCursor = 0;
+          work.phase = Phase::ParagraphLut;
+        }
+        break;
+      case Phase::ParagraphLut:
+        if (work.commitCursor < work.lut.size()) {
+          serialization::writePod(file, work.lut[work.commitCursor++].paragraphIndex);
+          expectedPosition += sizeof(uint16_t);
+        } else {
+          work.tableOffsets[3] = file.position();
+          work.commitCursor = 0;
+          work.phase = Phase::ListLut;
+        }
+        break;
+      case Phase::ListLut:
+        if (work.commitCursor < work.lut.size()) {
+          serialization::writePod(file, work.lut[work.commitCursor++].listItemIndex);
+          expectedPosition += sizeof(uint16_t);
+        } else {
+          work.tableOffsets[4] = file.position();
+          work.commitCursor = 0;
+          work.phase = Phase::VisibleLut;
+        }
+        break;
+      case Phase::VisibleLut:
+        if (work.commitCursor < work.lut.size()) {
+          serialization::writePod(file, work.lut[work.commitCursor++].visibleTextOffset);
+          expectedPosition += sizeof(uint32_t);
+        } else {
+          work.phase = Phase::Trailer;
+        }
+        break;
+      case Phase::Trailer:
+        if (asPartial) {
+          serialization::writePod(file, work.bytesConsumed);
+          serialization::writePod(file, work.totalBytes);
+          expectedPosition += sizeof(uint32_t) * 2;
+        }
+        work.phase = Phase::Header;
+        break;
+      case Phase::Header:
+        expectedPosition = HEADER_SIZE - sizeof(work.tableOffsets) - sizeof(builtPageCount_);
+        if (!file.seek(expectedPosition)) return failCommit();
+        serialization::writePod(file, builtPageCount_);
+        for (const auto offset : work.tableOffsets) serialization::writePod(file, offset);
+        expectedPosition = HEADER_SIZE;
+        work.phase = Phase::Version;
+        break;
+      case Phase::Version:
+        if (!file.seek(0)) return failCommit();
+        serialization::writePod(file, work.commitVersion);
+        expectedPosition = sizeof(work.commitVersion);
+        work.phase = Phase::Publish;
+        break;
+      case Phase::Publish:
+        // No yield between closing the committed tmp and swapping it into place.
+        file = HalFile{};
+        if (Storage.exists(filePath.c_str()) && !Storage.remove(filePath.c_str())) return failCommit();
+        if (!Storage.rename(binTmpPath().c_str(), filePath.c_str())) return failCommit();
+        return CommitStatus::Done;
+      case Phase::ExtractBegin:
+      case Phase::Extract:
+      case Phase::StartParse:
+      case Phase::Parse:
+        return failCommit();
     }
-    serialization::writePod(file, entry.fileOffset);
+    // Serialization writes return no status; a short write must not publish a valid version.
+    if (file.position() != expectedPosition) return failCommit();
   }
+  return CommitStatus::More;
+}
 
-  // Write anchor-to-page map for fragment navigation (e.g. footnote targets). For a
-  // partial, skip anchors that landed on the incomplete trailing page the suspend drops.
-  const uint32_t anchorMapOffset = file.position();
-  const auto& anchors = build_->parser->getAnchors();
-  uint16_t anchorCount = 0;
-  for (const auto& [anchor, page] : anchors) {
-    if (!asPartial || page < builtPageCount_) anchorCount++;
-  }
-  serialization::writePod(file, anchorCount);
-  for (const auto& [anchor, page] : anchors) {
-    if (asPartial && page >= builtPageCount_) continue;
-    serialization::writeString(file, anchor);
-    serialization::writePod(file, page);
-  }
-
-  const uint32_t paragraphLutOffset = file.position();
-  serialization::writePod(file, static_cast<uint16_t>(build_->lut.size()));
-  for (const auto& entry : build_->lut) {
-    serialization::writePod(file, entry.paragraphIndex);
-  }
-
-  const uint32_t liLutFileOffset = static_cast<uint32_t>(file.position());
-  for (const auto& entry : build_->lut) {
-    serialization::writePod(file, entry.listItemIndex);
-  }
-
-  const uint32_t visibleLutFileOffset = static_cast<uint32_t>(file.position());
-  for (const auto& entry : build_->lut) {
-    serialization::writePod(file, entry.visibleTextOffset);
-  }
-
-  if (asPartial) {
-    // Watermark trailer, located on load immediately after the visible-offset LUT.
-    serialization::writePod(file, bytesConsumed);
-    serialization::writePod(file, totalBytes);
-  }
-
-  // Patch header with the built page count and section offsets...
-  file.seek(HEADER_SIZE - sizeof(uint32_t) * 5 - sizeof(builtPageCount_));
-  serialization::writePod(file, builtPageCount_);
-  serialization::writePod(file, lutOffset);
-  serialization::writePod(file, anchorMapOffset);
-  serialization::writePod(file, paragraphLutOffset);
-  serialization::writePod(file, liLutFileOffset);
-  serialization::writePod(file, visibleLutFileOffset);
-  // ...then commit by overwriting the sentinel version with the real one. Writing the
-  // version last makes it the commit point: a crash before here leaves version 0.
-  file.seek(0);
-  serialization::writePod(file, version);
-  // Explicit close() required: member variable persists beyond function scope
-  file.close();
-
-  // Swap into place. A crash between remove and rename loses the old file but keeps a
-  // fully-committed tmp; the next build just removes it and rebuilds.
-  if (Storage.exists(filePath.c_str())) {
-    Storage.remove(filePath.c_str());
-  }
-  if (!Storage.rename(binTmpPath().c_str(), filePath.c_str())) {
-    LOG_ERR("SCT", "Failed to move built section into place");
-    Storage.remove(binTmpPath().c_str());
-    return false;
-  }
-  return true;
+bool Section::commitBuildFile(const uint8_t version, const uint32_t bytesConsumed, const uint32_t totalBytes) {
+  build_->bytesConsumed = bytesConsumed;
+  build_->totalBytes = totalBytes;
+  beginCommit(version);
+  CommitStatus status;
+  do {
+    status = commitSome(UINT16_MAX);
+  } while (status == CommitStatus::More);
+  return status == CommitStatus::Done;
 }
 
 bool Section::finalizeBuild() {
-  // Flush the trailing page (emits the last page via the completePageFn into the LUT).
-  build_->parser->finishParse();
-
-  if (!build_->reusedHtml) {
-    // Parse succeeded: promote the freshly unzipped HTML to the persistent cache so future
-    // rebuilds skip zip inflation. If promotion fails, drop the temp -- the build still succeeded.
-    if (!Storage.rename(build_->tmpHtmlPath.c_str(), build_->htmlPath.c_str())) {
-      LOG_DBG("SCT", "Failed to promote HTML cache, removing temp");
-      Storage.remove(build_->tmpHtmlPath.c_str());
+  if (build_->phase == BuildContext::Phase::Parse) {
+    if (!build_->parser->finishParse()) {
+      abandonBuild();
+      return false;
     }
+    if (!build_->reusedHtml) {
+      // Promote parsed HTML so later builds can reuse the extracted source.
+      if (!Storage.rename(build_->tmpHtmlPath.c_str(), build_->htmlPath.c_str())) {
+        LOG_DBG("SCT", "Failed to promote HTML cache, removing temp");
+        Storage.remove(build_->tmpHtmlPath.c_str());
+      }
+    }
+    beginCommit(SECTION_FILE_VERSION);
   }
 
-  const bool committed = commitBuildFile(SECTION_FILE_VERSION, 0, 0);
+  // A work-count bound, not a target time guarantee. Table entries retain their cursor.
+  const CommitStatus status = commitSome(32);
+  if (status == CommitStatus::More) return true;
   if (build_->cssParser) build_->cssParser->clear();
   build_.reset();
-  if (!committed) {
-    // commitBuildFile removed filePath before the failed swap, so nothing valid remains.
-    partial_ = false;
-    partialPageCount_ = 0;
-    pageCount = 0;
+  if (status == CommitStatus::Error) {
+    if (!Storage.exists(filePath.c_str())) {
+      partial_ = false;
+      partialPageCount_ = 0;
+    }
+    pageCount = partial_ ? partialPageCount_ : 0;
     builtPageCount_ = 0;
     return false;
   }
@@ -673,6 +742,14 @@ bool Section::finalizeBuild() {
 
 void Section::suspendBuild() {
   if (!build_) return;
+  // All pages are already complete once table commit starts. Finish that same
+  // cursor before destroying its owner; do not append a second partial footer.
+  if (build_->parser && build_->phase != BuildContext::Phase::Parse) {
+    while (build_) {
+      if (!finalizeBuild()) break;
+    }
+    return;
+  }
 
   // Only worth persisting if this build produced pages a pre-existing partial doesn't
   // already cover; otherwise keep the older (bigger) partial and just drop the tmp.
@@ -701,6 +778,8 @@ void Section::suspendBuild() {
     file.close();
     Storage.remove(binTmpPath().c_str());
   }
+  build_->htmlStream.reset();
+  build_->htmlOutput = HalFile{};
   if (!build_->reusedHtml && Storage.exists(build_->tmpHtmlPath.c_str())) {
     Storage.remove(build_->tmpHtmlPath.c_str());
   }
@@ -724,6 +803,8 @@ void Section::abandonBuild() {
   if (Storage.exists(filePath.c_str())) {
     Storage.remove(filePath.c_str());
   }
+  build_->htmlStream.reset();
+  build_->htmlOutput = HalFile{};
   if (!build_->reusedHtml && Storage.exists(build_->tmpHtmlPath.c_str())) {
     Storage.remove(build_->tmpHtmlPath.c_str());
   }

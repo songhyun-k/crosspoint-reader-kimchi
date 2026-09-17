@@ -217,7 +217,6 @@ class EpubReaderActivity final : public ReaderActivity {
   bool buildTickHeapGate();
   bool hasInputActivity() const;
   void runBackgroundWork();
-  bool buildHeapPaused = false;
   static constexpr size_t RENDER_MIN_FREE_HEAP = 24 * 1024;
   static constexpr int BUILD_WINDOW_AHEAD = 5;
   static constexpr int PARTIAL_REBUILD_START_MARGIN = 15;

@@ -16,7 +16,7 @@ constexpr size_t STATE_ALIGNED = (sizeof(tinfl_decompressor) + 7) & ~size_t{7};
 
 InflateStream::~InflateStream() { deinit(); }
 
-bool InflateStream::init(const bool streaming) {
+bool InflateStream::init(const bool streaming, const bool borrowBuildScratch) {
   // Every consumer constructs a fresh stream per operation, so acquire storage
   // from scratch each init (releasing any prior backing first).
   deinit();
@@ -25,7 +25,7 @@ bool InflateStream::init(const bool streaming) {
   // window (32KB) fit inside it, so a chapter-build inflate costs the heap
   // nothing. Absent (or already claimed): plain heap, freed in deinit().
   const size_t needed = STATE_ALIGNED + (streaming ? WINDOW_SIZE : 0);
-  arenaBase = buildscratch::claim(needed);
+  arenaBase = borrowBuildScratch ? buildscratch::claim(needed) : nullptr;
   if (arenaBase) {
     state = reinterpret_cast<tinfl_decompressor*>(arenaBase);
     window = streaming ? arenaBase + STATE_ALIGNED : nullptr;
@@ -79,7 +79,8 @@ void InflateStream::setFill(const FillFn fn, void* ctx) {
   fillCtx = ctx;
 }
 
-InflateStream::Status InflateStream::readAtMost(uint8_t* dest, const size_t maxLen, size_t* produced) {
+InflateStream::Status InflateStream::readAtMost(uint8_t* dest, const size_t maxLen, size_t* produced,
+                                                size_t maxInflateCalls) {
   *produced = 0;
   if (!state) return Status::Error;
 
@@ -102,6 +103,8 @@ InflateStream::Status InflateStream::readAtMost(uint8_t* dest, const size_t maxL
       return (finished && pendingLen == 0) ? Status::Done : Status::Ok;
     }
     if (finished) return Status::Done;
+    if (maxInflateCalls == 0) return Status::Ok;
+    --maxInflateCalls;
 
     if (inAvail == 0 && !inputExhausted && fill) {
       inAvail = fill(fillCtx, &inPtr);

@@ -6,10 +6,11 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <bitset>
 #include <cstdlib>
 
 struct FontDecompressor::PrewarmState {
-  enum class Phase { Align, Inflate, Extract };
+  enum class Phase : uint8_t { Align, Inflate, Extract };
   // Collection first uses all 512 words. After slot initialization, the first
   // 128 hold group IDs and the next 128 hold their running aligned offsets.
   uint32_t scratch[MAX_PAGE_GLYPHS] = {};
@@ -323,98 +324,84 @@ int FontDecompressor::beginPrewarm(const EpdFontData* fontData, const char* utf8
   cancelPrewarm();
   if (!fontData || !fontData->groups || !utf8Text) return 0;
 
-  // Step 1: Collect unique glyph indices needed for this page
-  // Retain the existing scratch and inflater output across returns; never put
-  // this 2 KiB collection/alignment workspace on the small render stack.
-  auto work = makeUniqueNoThrow<PrewarmState>();
-  if (!work) {
-    LOG_ERR("FDC", "Failed to allocate prewarm state");
-    return -1;
-  }
-  auto* neededGlyphs = work->scratch;
+  uint8_t resident = 0;
+  while (resident < pageSlotCount && pageSlots[resident].fontData != fontData) ++resident;
+  const PageSlot* cached = resident < pageSlotCount ? &pageSlots[resident] : nullptr;
+  std::bitset<MAX_PAGE_GLYPHS> selected;
+  std::unique_ptr<PrewarmState> work;
   uint16_t glyphCount = 0;
   bool glyphCapWarned = false;
-
-  const unsigned char* p = reinterpret_cast<const unsigned char*>(utf8Text);
-  while (*p) {
-    uint32_t cp = utf8NextCodepoint(&p);
-    if (cp == 0) break;
-
-    int32_t glyphIdx = findGlyphIndex(fontData, cp);
-    if (glyphIdx < 0) continue;
-
-    // Deduplicate
-    bool found = false;
-    for (uint16_t i = 0; i < glyphCount; i++) {
-      if (neededGlyphs[i] == static_cast<uint32_t>(glyphIdx)) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      if (glyphCount < MAX_PAGE_GLYPHS) {
-        neededGlyphs[glyphCount++] = static_cast<uint32_t>(glyphIdx);
-      } else if (!glyphCapWarned) {
+  const auto cachedEntry = [cached](uint32_t index) -> const PageGlyphEntry* {
+    if (!cached) return nullptr;
+    auto* end = cached->glyphs + cached->glyphCount;
+    const auto* entry = std::lower_bound(cached->glyphs, end, index, [](const PageGlyphEntry& glyph, uint32_t value) {
+      return glyph.glyphIndex < value;
+    });
+    return entry != end && entry->glyphIndex == index ? entry : nullptr;
+  };
+  const auto containsGlyph = [&](uint32_t index) {
+    if (work) return std::find(work->scratch, work->scratch + glyphCount, index) != work->scratch + glyphCount;
+    const auto* entry = cachedEntry(index);
+    return entry && selected[entry - cached->glyphs];
+  };
+  const auto addGlyph = [&](uint32_t index) {
+    if (containsGlyph(index)) return true;
+    if (glyphCount == MAX_PAGE_GLYPHS) {
+      if (!glyphCapWarned) {
         LOG_DBG("FDC", "Glyph cap (%u) reached during prewarm; excess glyphs will use hot-group fallback",
                 MAX_PAGE_GLYPHS);
         glyphCapWarned = true;
       }
+      return true;
     }
-  }
-
-  // Add ligature output glyphs: if both input codepoints of a ligature pair are
-  // in the needed set, the output glyph will be queried during rendering.
-  if (fontData->ligaturePairs && fontData->ligaturePairCount > 0) {
-    for (uint32_t li = 0; li < fontData->ligaturePairCount && glyphCount < MAX_PAGE_GLYPHS; li++) {
-      uint32_t leftCp = fontData->ligaturePairs[li].pair >> 16;
-      uint32_t rightCp = fontData->ligaturePairs[li].pair & 0xFFFF;
-
-      int32_t leftIdx = findGlyphIndex(fontData, leftCp);
-      int32_t rightIdx = findGlyphIndex(fontData, rightCp);
-      if (leftIdx < 0 || rightIdx < 0) continue;
-
-      // Check if both inputs are in neededGlyphs
-      bool hasLeft = false, hasRight = false;
-      for (uint16_t i = 0; i < glyphCount; i++) {
-        if (neededGlyphs[i] == static_cast<uint32_t>(leftIdx)) hasLeft = true;
-        if (neededGlyphs[i] == static_cast<uint32_t>(rightIdx)) hasRight = true;
-        if (hasLeft && hasRight) break;
-      }
-      if (!hasLeft || !hasRight) continue;
-
-      int32_t outIdx = findGlyphIndex(fontData, fontData->ligaturePairs[li].ligatureCp);
-      if (outIdx < 0) continue;
-
-      // Deduplicate
-      bool found = false;
-      for (uint16_t i = 0; i < glyphCount; i++) {
-        if (neededGlyphs[i] == static_cast<uint32_t>(outIdx)) {
-          found = true;
-          break;
+    const auto* entry = cachedEntry(index);
+    if (!work && entry && entry->bufferOffset != UINT32_MAX) {
+      selected.set(entry - cached->glyphs);
+    } else {
+      if (!work) {
+        // Covered text needs only a 64-byte membership set. Retain the larger
+        // collection/alignment workspace only when decompression is needed.
+        work = makeUniqueNoThrow<PrewarmState>();
+        if (!work) {
+          LOG_ERR("FDC", "Failed to allocate prewarm state");
+          return false;
+        }
+        uint16_t next = 0;
+        if (cached) {
+          for (uint16_t i = 0; i < cached->glyphCount; ++i) {
+            if (selected[i]) work->scratch[next++] = cached->glyphs[i].glyphIndex;
+          }
         }
       }
-      if (!found) {
-        neededGlyphs[glyphCount++] = static_cast<uint32_t>(outIdx);
-      }
+      work->scratch[glyphCount] = index;
+    }
+    ++glyphCount;
+    return true;
+  };
+
+  const unsigned char* p = reinterpret_cast<const unsigned char*>(utf8Text);
+  while (*p) {
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cp == 0) break;
+    const int32_t glyphIdx = findGlyphIndex(fontData, cp);
+    if (glyphIdx >= 0 && !addGlyph(glyphIdx)) return -1;
+  }
+
+  // Ligature outputs use the same selected set, including preceding outputs.
+  if (fontData->ligaturePairs) {
+    for (uint32_t li = 0; li < fontData->ligaturePairCount && glyphCount < MAX_PAGE_GLYPHS; ++li) {
+      const auto& pair = fontData->ligaturePairs[li];
+      const int32_t left = findGlyphIndex(fontData, pair.pair >> 16);
+      const int32_t right = findGlyphIndex(fontData, pair.pair & 0xFFFF);
+      if (left < 0 || right < 0 || !containsGlyph(left) || !containsGlyph(right)) continue;
+      const int32_t output = findGlyphIndex(fontData, pair.ligatureCp);
+      if (output >= 0 && !addGlyph(output)) return -1;
     }
   }
 
-  if (glyphCount == 0) return 0;
-
-  for (uint8_t s = 0; s < pageSlotCount; s++) {
-    if (pageSlots[s].fontData != fontData) continue;
-    bool covered = true;
-    for (uint16_t i = 0; i < glyphCount; i++) {
-      if (!findPageBitmap(pageSlots[s], neededGlyphs[i])) {
-        covered = false;
-        break;
-      }
-    }
-    if (covered) return 0;
-    // Replace this font's set, including any unextracted sentinel entries.
-    freePageSlot(s);
-    break;
-  }
+  if (!work) return 0;
+  auto* neededGlyphs = work->scratch;
+  if (cached) freePageSlot(resident);
   if (pageSlotCount >= MAX_PAGE_SLOTS) {
     LOG_ERR("FDC", "All %u page buffer slots full, cannot prewarm fontData=%p", MAX_PAGE_SLOTS, (void*)fontData);
     return -1;
