@@ -6,6 +6,7 @@
 #include <FontDecompressor.h>
 #include <HalGPIO.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <SdCardFont.h>
 #include <Utf8.h>
 
@@ -2295,7 +2296,7 @@ size_t GfxRenderer::getBufferSize() const { return frameBufferSize; }
 // void GfxRenderer::grayscaleRevert() const { display.grayscaleRevert(); }
 
 void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback) const {
-  display.displayGrayscaleBase(fallback, fadingFix);
+  display.displayGrayscaleBase(applyPromotedRefresh(fallback), fadingFix);
 }
 
 void GfxRenderer::preconditionGrayscale() const { display.preconditionGrayscale(); }
@@ -2323,6 +2324,82 @@ void GfxRenderer::copyGrayscaleLsbBuffers() const { display.copyGrayscaleLsbBuff
 void GfxRenderer::copyGrayscaleMsbBuffers() const { display.copyGrayscaleMsbBuffers(frameBuffer); }
 
 void GfxRenderer::displayGrayBuffer() const { display.displayGrayBuffer(fadingFix); }
+
+bool GfxRenderer::renderFactoryGrayscale(void (*render)(void*), void* context) {
+  if (!display.supportsFactoryGrayscale()) return false;
+
+  // ponytail: strips repeat page traversal; full planes can trade RAM for CPU if needed.
+  constexpr int STRIP_ROWS = 80;
+  const size_t stripBytes = static_cast<size_t>(panelWidthBytes) * STRIP_ROWS;
+  // Two bounded masks retain the sole BW framebuffer, including 1-bit chrome.
+  // Heap storage avoids a 16KB stack frame and a second full framebuffer.
+  auto masks = makeUniqueNoThrow<uint8_t[]>(stripBytes * 2);
+  if (!masks) {
+    LOG_ERR("GFX", "OOM: factory grayscale masks (%zu bytes)", stripBytes * 2);
+    return false;
+  }
+  waitRefreshComplete();
+  auto* lsb = masks.get();
+  auto* msb = lsb + stripBytes;
+#if LOG_LEVEL >= 2
+  uint32_t renderUs = 0, packUs = 0, writeUs = 0;
+#endif
+  for (int y = 0; y < panelHeight; y += STRIP_ROWS) {
+    const int rows = std::min(STRIP_ROWS, panelHeight - y);
+#if LOG_LEVEL >= 2
+    auto stageStart = micros();
+#endif
+    setRenderMode(GRAYSCALE_LSB);
+    beginStripTarget(lsb, y, rows);
+    clearScreen(0x00);
+    render(context);
+    endStripTarget();
+    setRenderMode(GRAYSCALE_MSB);
+    beginStripTarget(msb, y, rows);
+    clearScreen(0x00);
+    render(context);
+    endStripTarget();
+#if LOG_LEVEL >= 2
+    renderUs += micros() - stageStart;
+    stageStart = micros();
+#endif
+    const size_t offset = static_cast<size_t>(y) * panelWidthBytes;
+    for (size_t i = 0; i < static_cast<size_t>(rows) * panelWidthBytes; ++i) {
+      // Factory (MSB,LSB): white=00, light=01, dark=10, black=11.
+      // Overlay LSB marks dark; overlay MSB marks both grays.
+      const uint8_t ink = ~frameBuffer[offset + i];
+      msb[i] = ink & ~(msb[i] ^ lsb[i]);
+      lsb[i] = ink & ~lsb[i];
+    }
+#if LOG_LEVEL >= 2
+    packUs += micros() - stageStart;
+    stageStart = micros();
+#endif
+    writeGrayscalePlaneStrip(true, lsb, y, rows);
+    writeGrayscalePlaneStrip(false, msb, y, rows);
+#if LOG_LEVEL >= 2
+    writeUs += micros() - stageStart;
+#endif
+  }
+  setRenderMode(BW);
+#if LOG_LEVEL >= 2
+  const auto displayStart = micros();
+#endif
+  display.displayFactoryGrayscale(fadingFix);
+#if LOG_LEVEL >= 2
+  const auto cleanupStart = micros();
+#endif
+  cleanupGrayscaleWithFrameBuffer();
+#if LOG_LEVEL >= 2
+  LOG_DBG("GFX", "Factory AA: render=%luus pack=%luus write=%luus display=%luus cleanup=%luus scratch=%zu bytes",
+          static_cast<unsigned long>(renderUs), static_cast<unsigned long>(packUs), static_cast<unsigned long>(writeUs),
+          static_cast<unsigned long>(cleanupStart - displayStart), static_cast<unsigned long>(micros() - cleanupStart),
+          stripBytes * 2);
+#endif
+  // The glass has absolute grays; the next BW paint must not diff against them.
+  promoteNextRefresh(HalDisplay::HALF_REFRESH);
+  return true;
+}
 
 void GfxRenderer::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch, int yStart, int numRows) const {
   // Guard the uint16_t casts below: a negative would wrap to a huge length.

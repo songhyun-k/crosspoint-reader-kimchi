@@ -16,6 +16,11 @@ class HalDisplay {
   static constexpr uint32_t BUFFER_SIZE = DISPLAY_WIDTH_BYTES * DISPLAY_HEIGHT;
   mutable std::array<uint8_t, BUFFER_SIZE> pixels{};
   bool inverted = false;
+  bool factorySupported = true;
+  std::array<uint8_t, BUFFER_SIZE> lsb{}, msb{}, baseline{};
+  int factoryActivations = 0, bwActivations = 0, grayActivations = 0;
+  size_t planeBytesWritten = 0, cleanupBytesWritten = 0;
+  RefreshMode lastRefresh = FAST_REFRESH;
   uint16_t width = DISPLAY_WIDTH, height = DISPLAY_HEIGHT, stride = DISPLAY_WIDTH_BYTES;
 
   uint8_t* getFrameBuffer() const { return pixels.data(); }
@@ -26,8 +31,11 @@ class HalDisplay {
   void clearScreen(uint8_t color = 0xFF) const { std::memset(pixels.data(), color, getBufferSize()); }
   bool isInverted() const { return inverted; }
   void drawImage(const uint8_t*, uint16_t, uint16_t, uint16_t, uint16_t, bool = false) const {}
-  void displayBuffer(RefreshMode = FAST_REFRESH, bool = false) {}
-  void displayBufferAsync(RefreshMode = FAST_REFRESH) {}
+  void displayBuffer(RefreshMode mode = FAST_REFRESH, bool = false) {
+    ++bwActivations;
+    lastRefresh = mode;
+  }
+  void displayBufferAsync(RefreshMode mode = FAST_REFRESH) { displayBuffer(mode); }
   void waitRefreshComplete() {}
   bool supportsAsyncRefresh() const { return false; }
   uint8_t* lendFrameBufferStorage(uint32_t* size) {
@@ -35,14 +43,26 @@ class HalDisplay {
     return pixels.data();
   }
   void returnFrameBufferStorage() {}
-  void displayGrayscaleBase(RefreshMode = HALF_REFRESH, bool = false) {}
+  void displayGrayscaleBase(RefreshMode mode = HALF_REFRESH, bool = false) { displayBuffer(mode); }
   void preconditionGrayscale() {}
   void preconditionGrayscale(uint16_t, uint16_t, uint16_t, uint16_t) {}
   void copyGrayscaleLsbBuffers(const uint8_t*) {}
   void copyGrayscaleMsbBuffers(const uint8_t*) {}
-  void displayGrayBuffer(bool = false) {}
-  void cleanupGrayscaleBuffers(const uint8_t*) {}
-  void writeGrayscalePlaneStrip(bool, const uint8_t*, uint16_t, uint16_t) {}
+  void displayGrayBuffer(bool = false) { ++grayActivations; }
+  bool supportsFactoryGrayscale() const { return factorySupported && !inverted; }
+  void displayFactoryGrayscale(bool = false) {
+    ++factoryActivations;
+    ++grayActivations;
+  }
+  void cleanupGrayscaleBuffers(const uint8_t* bw) {
+    std::memcpy(baseline.data(), bw, getBufferSize());
+    cleanupBytesWritten += getBufferSize();
+  }
+  void writeGrayscalePlaneStrip(bool low, const uint8_t* rows, uint16_t y, uint16_t count) {
+    const size_t n = count * stride;
+    std::memcpy((low ? lsb : msb).data() + y * stride, rows, n);
+    planeBytesWritten += n;
+  }
   bool supportsStripGrayscale() const { return true; }
   bool combinesGrayscaleBase() const { return false; }
 };

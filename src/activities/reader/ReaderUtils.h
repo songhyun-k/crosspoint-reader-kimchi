@@ -192,6 +192,11 @@ inline void displayBaseWithRefreshCycle(const GfxRenderer& renderer, int& pagesU
   }
 }
 
+template <typename RenderFn>
+bool renderFactoryAntiAliased(GfxRenderer& renderer, RenderFn renderFn) {
+  return renderer.renderFactoryGrayscale([](void* context) { (*static_cast<RenderFn*>(context))(); }, &renderFn);
+}
+
 // Grayscale anti-aliasing pass. Renders content twice (LSB + MSB) to build
 // the grayscale buffer. Only the content callback is re-rendered — status bars
 // and other overlays should be drawn before calling this.

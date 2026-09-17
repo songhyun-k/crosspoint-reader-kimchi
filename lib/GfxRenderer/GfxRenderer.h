@@ -325,6 +325,8 @@ class GfxRenderer {
   void copyGrayscaleLsbBuffers() const;
   void copyGrayscaleMsbBuffers() const;
   void displayGrayBuffer() const;
+  // Absolute X4 text AA; false leaves the BW frame untouched for the normal fallback.
+  bool renderFactoryGrayscale(void (*render)(void*), void* context);
 
   // Tiled grayscale (X4): stream one band of a plane straight to controller RAM
   // from `scratch` (panelWidthBytes * numRows, physical rows [yStart, yStart+

@@ -1,3 +1,4 @@
+#include <BoardConfig.h>
 #include <HalDisplay.h>
 #include <HalGPIO.h>
 
@@ -131,6 +132,15 @@ void HalDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) { einkDisplay
 void HalDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) { einkDisplay.cleanupGrayscaleBuffers(bwBuffer); }
 
 void HalDisplay::displayGrayBuffer(bool turnOffScreen) { einkDisplay.displayGrayBuffer(turnOffScreen); }
+
+bool HalDisplay::supportsFactoryGrayscale() const {
+  return BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX4 &&
+         BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::SSD1677 && !isInverted();
+}
+
+void HalDisplay::displayFactoryGrayscale(bool turnOffScreen) {
+  einkDisplay.displayGrayBuffer(turnOffScreen, nullptr, true);
+}
 
 void HalDisplay::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* rows, uint16_t yStart, uint16_t numRows) {
   einkDisplay.writeGrayscalePlaneStrip(lsbPlane ? EInkDisplay::GRAY_PLANE_LSB : EInkDisplay::GRAY_PLANE_MSB, rows,

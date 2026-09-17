@@ -510,3 +510,92 @@ TEST_F(KoreanLayoutTest, IdleChunksPrewarmBuiltPagesAndFinishWithoutMovingTheRea
   }
   EXPECT_EQ(storage_test::files.at("before.page"), storage_test::files.at("after.page"));
 }
+
+TEST_F(KoreanLayoutTest, FactoryGrayscalePreservesKoreanPageAndChromeInEveryOrientation) {
+  ASSERT_TRUE(parse("<p>한글 독서 성능과 화질 <b>굵은 글씨</b></p>"));
+  ASSERT_FALSE(pages.empty());
+  FontDecompressor decompressor;
+  FontCacheManager cache(renderer.getFontMap(), renderer.getSdCardFonts());
+  cache.setFontDecompressor(&decompressor);
+  renderer.setFontCacheManager(&cache);
+  struct Context {
+    GfxRenderer& renderer;
+    Page& page;
+  } context{renderer, *pages.front()};
+  auto draw = [](void* ctx) {
+    auto& c = *static_cast<Context*>(ctx);
+    c.page.render(c.renderer, 1, 20, 20);
+  };
+  for (int orientation = 0; orientation < 4; ++orientation) {
+    renderer.setOrientation(static_cast<GfxRenderer::Orientation>(orientation));
+    renderer.setRenderMode(GfxRenderer::BW);
+    renderer.clearScreen();
+    draw(&context);
+    renderer.fillRect(10, 420, 180, 3, Color::Black);
+    const auto bw = panel.pixels;
+    std::vector<uint8_t> dark(panel.BUFFER_SIZE), grays(panel.BUFFER_SIZE);
+    renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+    renderer.beginStripTarget(dark.data(), 0, panel.height);
+    renderer.clearScreen(0);
+    draw(&context);
+    renderer.endStripTarget();
+    renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+    renderer.beginStripTarget(grays.data(), 0, panel.height);
+    renderer.clearScreen(0);
+    draw(&context);
+    renderer.endStripTarget();
+    renderer.setRenderMode(GfxRenderer::BW);
+    panel.factoryActivations = panel.bwActivations = 0;
+    panel.planeBytesWritten = 0;
+    ASSERT_TRUE(renderer.renderFactoryGrayscale(draw, &context));
+    EXPECT_EQ(panel.factoryActivations, 1);
+    EXPECT_EQ(panel.bwActivations, 0);
+    EXPECT_EQ(panel.planeBytesWritten, 2u * panel.BUFFER_SIZE);
+    EXPECT_EQ(panel.pixels, bw);
+    EXPECT_EQ(panel.baseline, bw);
+    std::array<size_t, 4> counts{};
+    for (size_t i = 0; i < bw.size(); ++i) {
+      for (uint8_t bit = 1; bit; bit <<= 1) {
+        const unsigned expected = (bw[i] & bit) ? 0 : (dark[i] & bit) ? 2 : (grays[i] & bit) ? 1 : 3;
+        const unsigned actual = ((panel.msb[i] & bit) ? 2 : 0) | ((panel.lsb[i] & bit) ? 1 : 0);
+        ASSERT_EQ(actual, expected) << "orientation=" << orientation << " byte=" << i;
+        ++counts[actual];
+      }
+    }
+    for (const auto count : counts) EXPECT_GT(count, 0u);
+    if (orientation == 1) {
+      renderer.displayBufferAsync(HalDisplay::FAST_REFRESH);
+    } else if (orientation == 2) {
+      renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+    } else {
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    }
+    EXPECT_EQ(panel.lastRefresh, HalDisplay::HALF_REFRESH);
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    EXPECT_EQ(panel.lastRefresh, HalDisplay::FAST_REFRESH);
+  }
+  renderer.setFontCacheManager(nullptr);
+}
+
+TEST_F(KoreanLayoutTest, FactoryGrayscaleFallbackLeavesFrameAndRefreshUntouched) {
+  renderer.clearScreen();
+  renderer.drawText(1, 20, 20, "한글");
+  const auto bw = panel.pixels;
+  int calls = 0;
+  auto draw = [](void* ctx) { ++*static_cast<int*>(ctx); };
+  panel.factorySupported = false;
+  EXPECT_FALSE(renderer.renderFactoryGrayscale(draw, &calls));
+  panel.factorySupported = true;
+  panel.inverted = true;
+  EXPECT_FALSE(renderer.renderFactoryGrayscale(draw, &calls));
+  panel.inverted = false;
+  failNextArray = true;
+  EXPECT_FALSE(renderer.renderFactoryGrayscale(draw, &calls));
+  EXPECT_FALSE(failNextArray);
+  EXPECT_EQ(calls, 0);
+  EXPECT_EQ(panel.factoryActivations, 0);
+  EXPECT_EQ(panel.planeBytesWritten, 0u);
+  EXPECT_EQ(panel.pixels, bw);
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  EXPECT_EQ(panel.lastRefresh, HalDisplay::FAST_REFRESH);
+}
