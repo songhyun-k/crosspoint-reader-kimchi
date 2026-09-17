@@ -1,13 +1,22 @@
 #pragma once
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 
 #include "FreeRTOS.h"
+#include "task.h"
 struct StaticSemaphore_t {
   std::mutex mutex;
+  std::atomic<TaskHandle_t> holder{nullptr};
 };
 using SemaphoreHandle_t = StaticSemaphore_t*;
-SemaphoreHandle_t xSemaphoreCreateMutex();
+inline SemaphoreHandle_t xSemaphoreCreateMutex() { return new StaticSemaphore_t; }
+inline TaskHandle_t xSemaphoreGetMutexHolder(SemaphoreHandle_t handle) { return handle->holder.load(); }
+inline int xQueuePeek(SemaphoreHandle_t handle, void*, unsigned) {
+  if (!handle->mutex.try_lock()) return pdFALSE;
+  handle->mutex.unlock();
+  return pdTRUE;
+}
 namespace inputTest {
 inline std::mutex contentionMutex;
 inline std::condition_variable contentionChanged;
@@ -23,9 +32,11 @@ inline int xSemaphoreTake(SemaphoreHandle_t handle, TickType_t) {
     }
     handle->mutex.lock();
   }
+  handle->holder = xTaskGetCurrentTaskHandle();
   return pdTRUE;
 }
 inline int xSemaphoreGive(SemaphoreHandle_t handle) {
+  handle->holder = nullptr;
   handle->mutex.unlock();
   return pdTRUE;
 }

@@ -14,23 +14,32 @@ EpubPageTurns::~EpubPageTurns() {
   if (queue) vQueueDelete(queue);
 }
 
-bool EpubPageTurns::accept(const Action action, const uint32_t capturedAtMs, const uint32_t nowMs) {
-  const Request request{counts.accepted + 1, capturedAtMs, nowMs, action};
-  if (!queue || xQueueSend(queue, &request, 0) != pdTRUE) {
-    if (counts.rejected == 0) LOG_ERR("ERS", "Page-turn queue unavailable or full; rejecting new requests");
+bool EpubPageTurns::accept(const Action action, const uint32_t capturedAtMs, const uint32_t nowMs,
+                           const uint32_t context) {
+  taskENTER_CRITICAL(&countsMux);
+  const Request request{counts.accepted + 1, capturedAtMs, nowMs, context, action};
+  const bool accepted = queue && xQueueSend(queue, &request, 0) == pdTRUE;
+  const bool firstRejection = !accepted && counts.rejected == 0;
+  if (!accepted) {
     ++counts.rejected;
-    return false;
+  } else {
+    ++counts.accepted;
+    counts.highWater = std::max(counts.highWater, static_cast<uint32_t>(uxQueueMessagesWaiting(queue)));
   }
-  ++counts.accepted;
-  counts.highWater = std::max(counts.highWater, static_cast<uint32_t>(uxQueueMessagesWaiting(queue)));
-  return true;
+  taskEXIT_CRITICAL(&countsMux);
+  if (firstRejection) LOG_ERR("ERS", "Page-turn queue unavailable or full; rejecting new requests");
+  return accepted;
 }
 
 bool EpubPageTurns::peek(Request& request) const { return queue && xQueuePeek(queue, &request, 0) == pdTRUE; }
 
 void EpubPageTurns::complete(const Outcome outcome, const uint32_t nowMs) {
   Request request{};
-  if (!queue || xQueueReceive(queue, &request, 0) != pdTRUE) return;
+  taskENTER_CRITICAL(&countsMux);
+  if (!queue || xQueueReceive(queue, &request, 0) != pdTRUE) {
+    taskEXIT_CRITICAL(&countsMux);
+    return;
+  }
   counts.maxWaitMs = std::max(counts.maxWaitMs, nowMs - request.acceptedAtMs);
   switch (outcome) {
     case Outcome::Applied:
@@ -44,6 +53,7 @@ void EpubPageTurns::complete(const Outcome outcome, const uint32_t nowMs) {
       ++counts.failed;
       break;
   }
+  taskEXIT_CRITICAL(&countsMux);
 }
 
 void EpubPageTurns::cancelPending(const Outcome outcome, const uint32_t nowMs) {
@@ -51,9 +61,16 @@ void EpubPageTurns::cancelPending(const Outcome outcome, const uint32_t nowMs) {
   while (peek(request)) complete(outcome, nowMs);
 }
 
+void EpubPageTurns::cancelStale(const uint32_t context, const uint32_t nowMs) {
+  Request request{};
+  while (peek(request) && request.context != context) complete(Outcome::ContextChanged, nowMs);
+}
+
 EpubPageTurns::Counts EpubPageTurns::getCounts() const {
+  taskENTER_CRITICAL(&countsMux);
   Counts result = counts;
   result.pending = queue ? uxQueueMessagesWaiting(queue) : 0;
+  taskEXIT_CRITICAL(&countsMux);
   return result;
 }
 

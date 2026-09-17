@@ -611,3 +611,38 @@ TEST(InputFramesTest, PageTurnFailureAndContextCancellationAccountForEveryAccept
   EXPECT_EQ(unavailable.getCounts().rejected, 1u);
   EXPECT_EQ(unavailable.getCounts().pending, 0u);
 }
+
+TEST(InputFramesTest, LateRequestsFromACancelledContextNeverReachTheNewContext) {
+  using Action = EpubPageTurns::Action;
+  using Outcome = EpubPageTurns::Outcome;
+  EpubPageTurns turns;
+  ASSERT_TRUE(turns.accept(Action::NextPage, 100, 110, 1));
+  std::promise<void> oldContextCancelled;
+  std::promise<void> lateRequestsStored;
+  auto stored = lateRequestsStored.get_future();
+  auto owner = std::async(std::launch::async, [&] {
+    turns.cancelPending(Outcome::ContextChanged, 120);
+    oldContextCancelled.set_value();
+    stored.wait();
+    turns.cancelStale(2, 150);
+    EpubPageTurns::Request head{};
+    const bool found = turns.peek(head);
+    if (found) turns.complete(Outcome::Applied, 160);
+    return std::make_pair(found, head);
+  });
+  oldContextCancelled.get_future().wait();
+  EXPECT_TRUE(turns.accept(Action::PreviousPage, 105, 130, 1));  // Main still held the old snapshot.
+  EXPECT_TRUE(turns.accept(Action::NextPage, 140, 145, 2));
+  lateRequestsStored.set_value();
+  const auto [found, head] = owner.get();
+  ASSERT_TRUE(found);
+  EXPECT_EQ(head.context, 2u);
+  EXPECT_EQ(head.sequence, 3u);
+  EXPECT_EQ(head.action, Action::NextPage);
+  const auto counts = turns.getCounts();
+  EXPECT_EQ(counts.accepted, 3u);
+  EXPECT_EQ(counts.cancelled, 2u);
+  EXPECT_EQ(counts.applied, 1u);
+  EXPECT_EQ(counts.pending, 0u);
+  EXPECT_EQ(counts.accepted, counts.applied + counts.cancelled + counts.failed + counts.pending);
+}

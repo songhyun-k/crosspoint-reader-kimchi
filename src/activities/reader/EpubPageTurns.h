@@ -8,8 +8,8 @@
 
 class Section;
 
-// The reader owns this FIFO for its entire lifetime. Admission and completion
-// run on main; the render task reports preparation errors to main separately.
+// Main admits input; the render task applies or terminates it. Queue storage
+// lives with the reader, through its acknowledged render-task retirement.
 class EpubPageTurns {
  public:
   // Twelve supported taps during a one-second stall, plus four outstanding turns.
@@ -21,6 +21,7 @@ class EpubPageTurns {
     uint32_t sequence;
     uint32_t capturedAtMs;
     uint32_t acceptedAtMs;
+    uint32_t context;
     Action action;
   };
   struct Counts {
@@ -39,6 +40,7 @@ class EpubPageTurns {
   alignas(Request) uint8_t storage[CAPACITY * sizeof(Request)]{};
   QueueHandle_t queue = nullptr;
   Counts counts;
+  mutable portMUX_TYPE countsMux = portMUX_INITIALIZER_UNLOCKED;
 
  public:
   EpubPageTurns();
@@ -47,10 +49,11 @@ class EpubPageTurns {
   EpubPageTurns& operator=(const EpubPageTurns&) = delete;
 
   bool available() const { return queue != nullptr; }
-  bool accept(Action action, uint32_t capturedAtMs, uint32_t nowMs);
+  bool accept(Action action, uint32_t capturedAtMs, uint32_t nowMs, uint32_t context = 0);
   bool peek(Request& request) const;
   void complete(Outcome outcome, uint32_t nowMs);
   void cancelPending(Outcome outcome, uint32_t nowMs);
+  void cancelStale(uint32_t context, uint32_t nowMs);
   Counts getCounts() const;
   // Caller holds RenderLock. A partial watermark is never a chapter boundary.
   // SectionChanged requires the caller to release the old Section and load the

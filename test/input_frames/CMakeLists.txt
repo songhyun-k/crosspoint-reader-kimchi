@@ -1,7 +1,9 @@
 get_target_property(INPUT_RENDERER_SOURCES SyntheticBoldTest SOURCES)
 list(FILTER INPUT_RENDERER_SOURCES INCLUDE REGEX "^/")
 get_target_property(INPUT_I18N_INCLUDES I18nTest INCLUDE_DIRECTORIES)
-add_executable(InputFramesTest InputFramesTest.cpp TaskBoundary.cpp
+add_executable(InputFramesTest InputFramesTest.cpp RenderLifetimeTest.cpp TaskBoundary.cpp
+  ${REPO_ROOT}/src/activities/Activity.cpp
+  ${REPO_ROOT}/src/activities/ActivityManagerRender.cpp
   ${REPO_ROOT}/src/MappedInputManager.cpp
   ${REPO_ROOT}/src/activities/reader/EpubPageTurns.cpp
   ${INPUT_RENDERER_SOURCES}

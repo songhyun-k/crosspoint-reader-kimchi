@@ -19,8 +19,108 @@
 #include "components/OptionPopup.h"
 
 class EpubReaderActivity final : public ReaderActivity {
+  struct Snapshot {
+    uint32_t context = 0;
+    uint32_t pageRevision = 0;
+    int spineIndex = 0;
+    int page = 0;
+    int pageCount = 0;
+    int availablePageCount = 0;
+    int progressPercent = 0;
+    int footnoteCount = 0;
+    int footnoteDepth = 0;
+    uint8_t orientation = 0;
+    bool loaded = false;
+    bool hasSection = false;
+    bool atEnd = false;
+    bool hasLinks = false;
+    bool hasBookmarks = false;
+    bool bookmarkMessage = false;
+    bool dictionaryMessage = false;
+    bool automatic = false;
+    bool paused = false;
+    bool needsWork = false;
+  };
+  enum class Control {
+    Open,
+    Pause,
+    Resume,
+    Chapter,
+    Toc,
+    Percent,
+    Href,
+    LinkAtPoint,
+    RestoreFootnote,
+    Orientation,
+    TextSettings,
+    ReleaseSection,
+    Progress,
+    AutoTurn,
+    Bookmark,
+    ReloadBookmarks,
+    DictionaryPage,
+    Footnotes,
+    RestoreFootnotes,
+    QrText,
+    Sync,
+    DeleteCache,
+    Screenshot,
+    ReturnFromEnd
+  };
+  struct Command {
+    Control type;
+    int argument = 0;
+    int secondArgument = 0;
+    bool flag = false;
+    bool succeeded = false;
+    uint32_t pageRevision = 0;
+    std::string text;
+    ProgressChangeResult progress;
+    int spineIndex = 0;
+    int pageNumber = 0;
+    int totalPages = 0;
+    std::optional<uint16_t> paragraphIndex;
+    SavedProgressPosition syncPosition{};
+    std::unique_ptr<Page> page;
+    std::vector<FootnoteEntry> footnotes;
+  };
+  // Only main publishes a command and keeps its owning values alive until acknowledgement.
+  std::atomic<Command*> pendingControl{nullptr};
+  std::atomic<bool> redrawRequested{false};
+  std::atomic<bool> inputActive{false};
+  mutable portMUX_TYPE snapshotMux = portMUX_INITIALIZER_UNLOCKED;
+  Snapshot snapshot;
+  uint32_t inputContext = 0;   // Main's last observed context.
+  uint32_t readerContext = 0;  // Render-task context for accepted requests.
+  uint32_t pageRevision = 0;   // Completed page render, distinct from location application.
+  bool readerPaused = false;
+#if defined(ARDUINO_ARCH_ESP32)
+  static_assert(sizeof(Command) < 256);
+#endif
+  Snapshot readSnapshot() const;
+  void publishSnapshot();
+  void runCommand(Command& command);
+  void executeCommand(Command& command);
+  void pauseReader();
+  void changeReaderContext();
+  bool loadBookOnRender();
+  void jumpToPercentOnRender(int percent);
+  bool jumpToChapterOnRender(int spineIndex, const std::string& anchor);
+  void navigateToHrefOnRender(const std::string& href, bool savePosition);
+  void restoreSavedPositionOnRender();
+  void applyOrientationOnRender(uint8_t orientation);
+  void toggleAutoPageTurnOnRender(uint8_t option);
+  void applyReaderTextSettingsOnRender();
+  void addBookmarkOnRender();
+  void applyProgressOnRender(const ProgressChangeResult& progress);
+  void releaseSection();
+  CrossPointPosition currentPositionOnRender() const;
+  bool atEndOnRender() const;
+  // Metadata is published after Open. Section, navigation and build state are
+  // render-task-owned; main reads the value snapshot or sends a control command.
   std::shared_ptr<Epub> epub;
   std::unique_ptr<Section> section = nullptr;
+  bool renderRetired = false;  // Render-task owned; blocks stale notifications after cleanup.
   int currentSpineIndex = 0;
   int nextPageNumber = 0;
   std::optional<uint16_t> pendingPageJump;
@@ -33,9 +133,8 @@ class EpubReaderActivity final : public ReaderActivity {
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   EpubPageTurns pageTurns;
-  // Main requests preparation; render consumes it without advancing position.
-  std::atomic<bool> prepareNextPage{false};
-  std::atomic<bool> pagePreparationFailed{false};
+  // Render prepares the retained head's next page without advancing position.
+  bool prepareNextPage = false;
   void processPageTurns();
   void cancelPageTurns(EpubPageTurns::Outcome outcome, const char* reason);
   bool pendingPercentJump = false;
@@ -158,11 +257,12 @@ class EpubReaderActivity final : public ReaderActivity {
   std::string moreRowValue(int row) const;
   void activateMoreRow(int row);
   void openDictionaryWordSelect();
+  void openFootnotes(bool followSingle = false);
   bool launchKOReaderSync();
   unsigned long confirmLongPressThreshold() const;
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void loadCachedBookmarks();
-  void addBookmark();
+  void addBookmark(bool showMessage = false);
   void updateBookmarkFlag();
 
   void navigateToHref(const std::string& href, bool savePosition = false);
@@ -194,7 +294,12 @@ class EpubReaderActivity final : public ReaderActivity {
 
   void loop() override;
   void onSuspend() override;
+  void onResume() override;
   void onExit() override;
+  bool onPrepareExit() override;
+  void onRenderExit() override;
+  void render(RenderLock&& lock) override;
+  void requestUpdate(bool immediate = false) override;
 
   bool pageTurn(bool isForward) override;
   bool skipPages(int amount) override;
@@ -204,5 +309,4 @@ class EpubReaderActivity final : public ReaderActivity {
   bool skipLoopDelay() override;
 
   ScreenshotInfo getScreenshotInfo() const override;
-  CrossPointPosition getCurrentPosition() const;
 };

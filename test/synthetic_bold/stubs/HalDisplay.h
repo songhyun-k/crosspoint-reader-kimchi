@@ -25,6 +25,7 @@ class HalDisplay {
   uint32_t getBufferSize() const { return static_cast<uint32_t>(stride) * height; }
   void clearScreen(uint8_t color = 0xFF) const { std::memset(pixels.data(), color, getBufferSize()); }
   bool isInverted() const { return inverted; }
+  void setInverted(bool value) { inverted = value; }
   void drawImage(const uint8_t*, uint16_t, uint16_t, uint16_t, uint16_t, bool = false) const {}
   void displayBuffer(RefreshMode = FAST_REFRESH, bool = false) {}
   void displayBufferAsync(RefreshMode = FAST_REFRESH) {}

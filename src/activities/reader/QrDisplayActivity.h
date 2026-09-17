@@ -7,8 +7,8 @@
 
 class QrDisplayActivity final : public Activity {
  public:
-  explicit QrDisplayActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& textPayload)
-      : Activity("QrDisplay", renderer, mappedInput), textPayload(textPayload) {}
+  explicit QrDisplayActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string textPayload)
+      : Activity("QrDisplay", renderer, mappedInput), textPayload(std::move(textPayload)) {}
 
   void onEnter() override;
   void onExit() override;
