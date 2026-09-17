@@ -214,7 +214,26 @@ uint32_t EpdFont::applyLigatures(uint32_t cp, const char*& text) const {
   return cp;
 }
 
-const EpdGlyph* EpdFont::getGlyph(const uint32_t cp) const {
+void EpdFont::initImmutableIntervals() {
+  if (!data || !data->intervals || static_cast<int>(data->intervalCount) <= 0 || data->glyphMissHandler) return;
+  const auto find = [this](uint32_t cp) {
+    const auto* begin = data->intervals;
+    const auto* end = begin + data->intervalCount;
+    while (begin != end) {
+      const auto* mid = begin + (end - begin) / 2;
+      if (cp < mid->first)
+        end = mid;
+      else
+        begin = mid + 1;
+    }
+    return begin != data->intervals && cp <= (begin - 1)->last ? begin - 1 : nullptr;
+  };
+  hangulInterval = find(0xAC00);
+  spaceInterval = find(0x20);
+  immutableData = data;
+}
+
+const EpdGlyph* EpdFont::getGlyphFallback(const uint32_t cp) const {
   const int count = data->intervalCount;
   if (count == 0 && !data->glyphMissHandler) return nullptr;
 
@@ -243,7 +262,7 @@ const EpdGlyph* EpdFont::getGlyph(const uint32_t cp) const {
   }
 
   if (cp != REPLACEMENT_GLYPH) {
-    return getGlyph(REPLACEMENT_GLYPH);
+    return getGlyphFallback(REPLACEMENT_GLYPH);
   }
   return nullptr;
 }

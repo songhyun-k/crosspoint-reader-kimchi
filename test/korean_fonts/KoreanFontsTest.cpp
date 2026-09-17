@@ -120,3 +120,61 @@ TEST(KoreanFontsTest, LocallyGeneratedCpfontsLoadWithTheUnchangedV4Reader) {
     ASSERT_EQ(sd.prewarm("한글", 1), 0);
   }
 }
+
+TEST(KoreanFontsTest, ImmutableLookupMatchesBoundaryAndMissingGlyphIdentity) {
+  constexpr EpdGlyph glyphs[] = {
+      {0, 0, 24, 0, 0, 0, 0}, {1, 1, 32, 0, 1, 1, 0}, {1, 1, 48, 0, 1, 1, 0}, {1, 1, 64, 0, 1, 1, 0}};
+  constexpr EpdUnicodeInterval intervals[] = {{32, 32, 0}, {0xAC00, 0xAC02, 1}, {0xFFFD, 0xFFFD, 3}};
+  EpdFontData compact{};
+  compact.glyph = glyphs;
+  compact.intervals = intervals;
+  compact.intervalCount = std::size(intervals);
+  const EpdFontData empty{};
+  const EpdFontData* fonts[] = {&empty, &compact, &kimchi_batang_14_regular, &kimchi_ui_10_regular};
+  for (const EpdFontData* d : fonts) {
+    const EpdFont plain(d), fast(d, true);
+    for (uint32_t cp : {0u, 31u, 32u, 33u, 65u, 0x3001u, 0x3131u, 0x4E00u, 0xABFFu, 0xAC00u, 0xAC02u, 0xAC03u, 0xD7A3u,
+                        0xD7A4u, 0xFFFDu, 0x1F600u, 0x10FFFFu, 0x110000u, UINT32_MAX}) {
+      EXPECT_EQ(fast.getGlyph(cp), plain.getGlyph(cp)) << std::hex << cp;
+      EXPECT_EQ(fast.hasCodepoint(cp), plain.hasCodepoint(cp)) << std::hex << cp;
+    }
+  }
+}
+
+TEST(KoreanFontsTest, CallbackAbsenceDoesNotMakeMutableIntervalsImmutable) {
+  constexpr EpdGlyph glyphs[] = {
+      {0, 0, 24, 0, 0, 0, 0}, {1, 1, 32, 0, 1, 1, 0}, {1, 1, 48, 0, 1, 1, 0}, {1, 1, 64, 0, 1, 1, 0}};
+  std::vector<EpdUnicodeInterval> intervals = {{32, 32, 0}, {0xAC00, 0xAC00, 1}};
+  EpdFontData d{};
+  d.glyph = glyphs;
+  d.intervals = intervals.data();
+  d.intervalCount = intervals.size();
+  EpdFont font(&d);
+  for (int cycle = 0; cycle < 3; ++cycle) {
+    EXPECT_EQ(font.getGlyph(0xAC00), &glyphs[1]);
+    intervals[1].offset = 2;
+    EXPECT_EQ(font.getGlyph(0xAC00), &glyphs[2]);
+    std::vector<EpdUnicodeInterval> rebuilt = {{32, 32, 0}, {0xAC00, 0xAC00, 3}};
+    d.intervals = rebuilt.data();
+    intervals.clear();
+    intervals.shrink_to_fit();
+    EXPECT_EQ(font.getGlyph(0xAC00), &glyphs[3]);
+    intervals = std::move(rebuilt);
+    intervals[1].offset = 1;
+    d.intervals = intervals.data();
+  }
+  d.glyphMissCtx = const_cast<EpdGlyph*>(&glyphs[3]);
+  d.glyphMissHandler = [](void* ctx, uint32_t cp) -> const EpdGlyph* {
+    return cp == 0x1F600 ? static_cast<const EpdGlyph*>(ctx) : nullptr;
+  };
+  EXPECT_EQ(font.getGlyph(0x1F600), &glyphs[3]);
+  EXPECT_FALSE(font.hasCodepoint(0x1F600));
+  EpdFont replaced(&kimchi_batang_14_regular, true);
+  replaced.data = &d;
+  EXPECT_EQ(replaced.getGlyph(0xAC00), &glyphs[1]);
+  EXPECT_EQ(replaced.getGlyph(0x1F600), &glyphs[3]);
+  replaced = font;
+  EXPECT_EQ(replaced.getGlyph(0xAC00), &glyphs[1]);
+  replaced = EpdFont(&kimchi_batang_14_regular, true);
+  EXPECT_EQ(replaced.getGlyph(0xD7A3), EpdFont(&kimchi_batang_14_regular).getGlyph(0xD7A3));
+}

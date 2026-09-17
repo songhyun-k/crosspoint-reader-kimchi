@@ -2,12 +2,20 @@
 #include "EpdFontData.h"
 
 class EpdFont {
+  const EpdFontData* immutableData = nullptr;
+  const EpdUnicodeInterval* hangulInterval = nullptr;
+  const EpdUnicodeInterval* spaceInterval = nullptr;
+  void initImmutableIntervals();
+  const EpdGlyph* getGlyphFallback(uint32_t cp) const;
   void getTextBounds(const char* string, int startX, int startY, int* minX, int* minY, int* maxX, int* maxY,
                      bool syntheticBold, bool halfSize) const;
 
  public:
   const EpdFontData* data;
-  explicit EpdFont(const EpdFontData* data) : data(data) {}
+  // Opt in only for immutable metadata and arrays whose lifetime covers this font.
+  explicit EpdFont(const EpdFontData* data, bool immutable = false) : data(data) {
+    if (immutable) initImmutableIntervals();
+  }
   ~EpdFont() = default;
   void getTextDimensions(const char* string, int* w, int* h, bool syntheticBold = false, bool halfSize = false) const;
 
@@ -18,7 +26,19 @@ class EpdFont {
     return syntheticBold && advance > 0 ? advance + fp4::fromPixel(1) : advance;
   }
 
-  const EpdGlyph* getGlyph(uint32_t cp) const;
+  const EpdGlyph* getGlyph(uint32_t cp) const {
+    // Public data replacement disables the cached intervals without touching them.
+    if (immutableData && data == immutableData) {
+      // Initialization guarantees each interval contains its probe codepoint.
+      if (cp == 0x20 && spaceInterval) {
+        return &data->glyph[spaceInterval->offset + (cp - spaceInterval->first)];
+      }
+      if (cp >= 0xAC00 && hangulInterval && cp <= hangulInterval->last) {
+        return &data->glyph[hangulInterval->offset + (cp - hangulInterval->first)];
+      }
+    }
+    return getGlyphFallback(cp);
+  }
 
   /// Returns true if this font covers `cp`: either via its in-RAM interval
   /// table or, for SD card fonts, via the coverageHandler that consults the
