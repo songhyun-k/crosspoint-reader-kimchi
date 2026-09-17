@@ -39,6 +39,25 @@
 #define QMI8658_WHO_AM_I_VALUE 0x05  // WHO_AM_I expected value
 
 class HalGPIO {
+ public:
+  static constexpr uint8_t BUTTON_COUNT = 7;
+  // One observation, owned by the producer until published, then by the main UI.
+  // Durations stop at capture time: time spent waiting for the UI is not a hold.
+  struct ButtonFrame {
+    uint32_t sequence = 0;
+    uint32_t capturedAtMs = 0;
+    uint32_t buttonHeldMs[BUTTON_COUNT] = {};
+    uint32_t heldMs = 0;
+    uint32_t powerHeldMs = 0;
+    uint8_t down = 0;
+    uint8_t pressed = 0;
+    uint8_t released = 0;
+    bool debouncePending = false;
+  };
+
+ private:
+  ButtonFrame buttonFrame;
+  void captureButtonFrame();
 #if CROSSPOINT_EMULATED == 0
   InputManager inputMgr;
 #endif
@@ -78,6 +97,10 @@ class HalGPIO {
   bool wasAnyPressed() const;
   bool wasReleased(uint8_t buttonIndex) const;
   bool wasAnyReleased() const;
+  // Queries never advance the frame; update() is the consumption boundary.
+  const ButtonFrame& getButtonFrame() const { return buttonFrame; }
+  unsigned long getButtonHeldTime(uint8_t buttonIndex) const;
+  void suppressButtonReleases(uint8_t buttons);
   unsigned long getHeldTime() const;
   unsigned long getPowerButtonHeldTime() const;
   bool hasTouch() const;

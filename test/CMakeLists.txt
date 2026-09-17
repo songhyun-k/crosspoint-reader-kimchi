@@ -65,3 +65,5 @@ add_subdirectory(korean_fonts)
 add_subdirectory(synthetic_bold)
 add_subdirectory(xtc_memory)
 add_subdirectory(korean_layout)
+
+add_subdirectory(input_frames)

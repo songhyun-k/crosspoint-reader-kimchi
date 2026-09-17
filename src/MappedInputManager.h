@@ -49,7 +49,6 @@ class MappedInputManager {
   bool wasReleased(Button button) const;
   // One-shot threshold event while the button is down; consumes its release.
   bool wasLongPressed(Button button, unsigned long thresholdMs) const;
-  bool consumeSuppressedRelease() const;
   bool isPressed(Button button) const;
   bool hasTouch() const;
   bool wasScreenTapped(int& x, int& y) const;
@@ -126,6 +125,7 @@ class MappedInputManager {
 
   Button mapScreenDirection(Button button) const;
   Labels mapFrontLabels(const char* back, const char* confirm, const char* left, const char* right) const;
+  uint8_t buttonMask(Button button) const;
   bool mapButton(Button button, bool (HalGPIO::*fn)(uint8_t) const) const;
   // SDK edge classification (fui::edgeSwipe) + the shared decode/held-time
   // bookkeeping; the wrappers below give each edge its board meaning.
@@ -138,13 +138,12 @@ class MappedInputManager {
   bool wasPowerConfirmClick() const;
 #endif
   void rememberTouchHeldTime() const;
-  void suppressNextRelease(Button button) const;
 
   mutable bool touchHeldOverrideValid = false;
   mutable unsigned long touchHeldOverrideMs = 0;
   mutable unsigned long touchHeldOverrideAt = 0;
-  mutable uint16_t longPressFiredButtons = 0;
-  mutable uint16_t suppressedReleaseButtons = 0;
+  mutable uint8_t longPressFiredButtons = 0;
+  mutable uint8_t suppressedReleaseButtons = 0;
 #if FREEINK_CAP_TOUCH
   bool powerConfirmClickFrame = false;
 #endif
