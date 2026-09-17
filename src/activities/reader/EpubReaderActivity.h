@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "BookmarkEntry.h"
+#include "EpubPageTurns.h"
 #include "EpubReaderMenuActivity.h"
 #include "ProgressMapper.h"
 #include "ReaderActivity.h"
@@ -31,7 +32,12 @@ class EpubReaderActivity final : public ReaderActivity {
   std::optional<uint32_t> pendingOffsetJump;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
-  int8_t pendingManualTurn = 0;
+  EpubPageTurns pageTurns;
+  // Main requests preparation; render consumes it without advancing position.
+  std::atomic<bool> prepareNextPage{false};
+  std::atomic<bool> pagePreparationFailed{false};
+  void processPageTurns();
+  void cancelPageTurns(EpubPageTurns::Outcome outcome, const char* reason);
   bool pendingPercentJump = false;
   float pendingSpineProgress = 0.0f;
   bool pendingScreenshot = false;
@@ -187,6 +193,8 @@ class EpubReaderActivity final : public ReaderActivity {
   ~EpubReaderActivity() override;
 
   void loop() override;
+  void onSuspend() override;
+  void onExit() override;
 
   bool pageTurn(bool isForward) override;
   bool skipPages(int amount) override;

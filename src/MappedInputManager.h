@@ -102,6 +102,7 @@ class MappedInputManager {
   bool wasAnyPressed() const;
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
+  unsigned long getHeldTime(Button button) const;
   const GfxRenderer& getRenderer() const { return renderer; }
   Labels mapLabels(const char* back, const char* confirm, const char* previous, const char* next) const;
   // Maps four screen-direction labels onto the two physical front-button roles

@@ -179,6 +179,7 @@ void ActivityManager::loop() {
           stackActivities.pop_back();
         }
       } else if (pendingAction == PendingAction::Push) {
+        if (currentActivity) currentActivity->onSuspend();
         if (auto* fcm = renderer.getFontCacheManager()) fcm->clearCache();
         // Move current activity to stack
         stackActivities.push_back(std::move(currentActivity));

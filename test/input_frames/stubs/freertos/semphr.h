@@ -7,6 +7,7 @@ struct StaticSemaphore_t {
   std::mutex mutex;
 };
 using SemaphoreHandle_t = StaticSemaphore_t*;
+SemaphoreHandle_t xSemaphoreCreateMutex();
 namespace inputTest {
 inline std::mutex contentionMutex;
 inline std::condition_variable contentionChanged;

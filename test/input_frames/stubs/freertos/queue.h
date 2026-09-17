@@ -39,6 +39,12 @@ inline int xQueueReceive(QueueHandle_t queue, void* item, unsigned) {
   --queue->count;
   return pdTRUE;
 }
+inline int xQueuePeek(QueueHandle_t queue, void* item, unsigned) {
+  std::lock_guard lock(queue->mutex);
+  if (!queue->count) return pdFALSE;
+  std::memcpy(item, queue->bytes + queue->head * queue->itemSize, queue->itemSize);
+  return pdTRUE;
+}
 inline unsigned uxQueueMessagesWaiting(QueueHandle_t queue) {
   std::lock_guard lock(queue->mutex);
   return queue->count;

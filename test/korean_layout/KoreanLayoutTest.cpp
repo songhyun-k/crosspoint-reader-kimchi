@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include "activities/reader/EpubPageTurns.h"
+
 namespace {
 bool failNextArray = false;
 using Style = EpdFontFamily::Style;
@@ -509,4 +511,95 @@ TEST_F(KoreanLayoutTest, IdleChunksPrewarmBuiltPagesAndFinishWithoutMovingTheRea
     ASSERT_TRUE(committed->serialize(file));
   }
   EXPECT_EQ(storage_test::files.at("before.page"), storage_test::files.at("after.page"));
+}
+
+TEST_F(KoreanLayoutTest, RetainedTurnsWaitForRealPartialPagesAndAccountForChapterBoundaries) {
+  using Action = EpubPageTurns::Action;
+  using Step = EpubPageTurns::Step;
+  using Outcome = EpubPageTurns::Outcome;
+  // Same long paragraph as the existing partial-cache fixture above.
+  std::string html = "<html><body><p>";
+  for (int i = 0; i < 2000; ++i) html += "가나다라마바사 아자차카타파하 ";
+  html += "</p></body></html>";
+  storage_test::files["cache/html/0.html"] = std::vector<uint8_t>(html.begin(), html.end());
+  const auto epub = std::make_shared<Epub>();
+  ReaderRenderSpec spec;
+  spec.fontId = 1;
+  spec.viewportWidth = 227;
+  spec.viewportHeight = 160;
+  spec.characterWrap = false;
+  spec.extraParagraphSpacing = true;
+  EpubPageTurns turns;
+  std::optional<uint16_t> jump;
+  int spine = 0;
+  ASSERT_TRUE(turns.accept(Action::NextPage, 100, 100));
+  ASSERT_TRUE(turns.accept(Action::PreviousPage, 180, 180));
+  {
+    Section building(epub, spine, renderer);
+    ASSERT_TRUE(building.startBuild(spec));
+    EXPECT_EQ(turns.applyTo(building, spine, 2, jump, 200), Step::NeedsNextPage);
+    EXPECT_EQ(building.currentPage, 0);
+    EXPECT_EQ(spine, 0);
+    ASSERT_TRUE(building.buildSomeMore(1));
+    ASSERT_FALSE(building.isBuildComplete());
+    building.suspendBuild();
+  }
+  Section section(epub, spine, renderer);
+  ASSERT_TRUE(section.loadSectionFile(spec));
+  ASSERT_TRUE(section.isPartial());
+  const int watermark = section.pageCount;
+  section.currentPage = watermark - 1;
+  EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 400), Step::NeedsNextPage);
+  EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 600), Step::NeedsNextPage);
+  EXPECT_EQ(section.currentPage, watermark - 1);
+  EXPECT_EQ(spine, 0);
+  EXPECT_EQ(turns.getCounts().pending, 2u);
+  ASSERT_TRUE(section.startBuild(spec));
+  for (int chunk = 0; chunk < 1000 && section.pageCount <= watermark; ++chunk) {
+    ASSERT_TRUE(section.buildSomeMore(1, 1));
+  }
+  ASSERT_GT(section.pageCount, watermark);
+  EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 800), Step::Applied);
+  EXPECT_EQ(section.currentPage, watermark);
+  EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 1000), Step::Applied);
+  EXPECT_EQ(section.currentPage, watermark - 1);
+  EXPECT_EQ(turns.getCounts().applied, 2u);
+  ASSERT_TRUE(section.buildSomeMore(0));
+  ASSERT_TRUE(section.isBuildComplete());
+
+  section.currentPage = 0;
+  ASSERT_TRUE(turns.accept(Action::PreviousPage, 1100, 1100));
+  ASSERT_TRUE(turns.accept(Action::NextPage, 1180, 1180));
+  EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 1200), Step::Boundary);
+  EXPECT_EQ(section.currentPage, 0);
+  EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 1400), Step::Applied);
+  EXPECT_EQ(section.currentPage, 1);  // Previous at book start cannot cancel out Next.
+
+  ASSERT_TRUE(turns.accept(Action::NextChapter, 1500, 1500));
+  EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 1600), Step::SectionChanged);
+  EXPECT_EQ(spine, 1);
+  EXPECT_FALSE(jump.has_value());
+  section.currentPage = 0;
+  ASSERT_TRUE(turns.accept(Action::PreviousPage, 1700, 1700));
+  EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 1800), Step::SectionChanged);
+  EXPECT_EQ(spine, 0);
+  EXPECT_EQ(jump, UINT16_MAX);
+  ASSERT_TRUE(turns.accept(Action::NextChapter, 1900, 1900));
+  EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 2000), Step::SectionChanged);
+  EXPECT_EQ(spine, 1);
+  EXPECT_FALSE(jump.has_value());
+  section.currentPage = section.pageCount - 1;
+  ASSERT_TRUE(turns.accept(Action::NextPage, 2100, 2100));
+  EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 2200), Step::SectionChanged);
+  EXPECT_EQ(spine, 2);
+  ASSERT_TRUE(turns.accept(Action::NextPage, 2300, 2300));
+  EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 2400), Step::Boundary);
+  ASSERT_TRUE(turns.accept(Action::PreviousPage, 2500, 2500));
+  turns.cancelPending(Outcome::ContextChanged, 2600);
+  const auto counts = turns.getCounts();
+  EXPECT_EQ(counts.accepted, counts.applied + counts.cancelled + counts.failed + counts.pending);
+  EXPECT_EQ(counts.accepted, 10u);
+  EXPECT_EQ(counts.applied, 7u);
+  EXPECT_EQ(counts.cancelled, 3u);
+  EXPECT_EQ(counts.pending, 0u);
 }

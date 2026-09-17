@@ -46,6 +46,7 @@ struct PageTurnResult {
   bool prev;
   bool next;
   bool fromTilt;
+  unsigned long heldMs;
 };
 
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
@@ -59,13 +60,20 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
     if (usePress) return input.wasPressed(button);
     return input.wasLongPressed(button, SKIP_HOLD_MS) || input.wasReleased(button);
   };
-  const bool prev =
-      tiltPrev || (pageButtonTriggered(MappedInputManager::Button::PageBack) || pageButtonTriggered(prevButton));
+  if (tiltPrev) return {true, false, true, 0};
+  if (pageButtonTriggered(MappedInputManager::Button::PageBack)) {
+    return {true, false, false, input.getHeldTime(MappedInputManager::Button::PageBack)};
+  }
+  if (pageButtonTriggered(prevButton)) return {true, false, false, input.getHeldTime(prevButton)};
+  if (tiltNext) return {false, true, true, 0};
+  if (pageButtonTriggered(MappedInputManager::Button::PageForward)) {
+    return {false, true, false, input.getHeldTime(MappedInputManager::Button::PageForward)};
+  }
   const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
                          input.wasReleased(MappedInputManager::Button::Power);
-  const bool next = tiltNext || pageButtonTriggered(MappedInputManager::Button::PageForward) || powerTurn ||
-                    pageButtonTriggered(nextButton);
-  return {prev, next, tiltPrev || tiltNext};
+  if (powerTurn) return {false, true, false, input.getHeldTime(MappedInputManager::Button::Power)};
+  if (pageButtonTriggered(nextButton)) return {false, true, false, input.getHeldTime(nextButton)};
+  return {};
 }
 
 struct TouchPageTurn {
@@ -250,7 +258,7 @@ inline bool handleBackNavigation(const MappedInputManager& mappedInput, Activity
                              mappedInput.wasReleased(MappedInputManager::Button::Back);
   if (!backTriggered) return false;
 
-  const bool longPress = mappedInput.getHeldTime() >= GO_BACK_OR_HOME_MS;
+  const bool longPress = mappedInput.getHeldTime(MappedInputManager::Button::Back) >= GO_BACK_OR_HOME_MS;
   if (longPress != SETTINGS.backShortToFileBrowser) {
     activityManager.goToFileBrowser(filePath);
   } else {

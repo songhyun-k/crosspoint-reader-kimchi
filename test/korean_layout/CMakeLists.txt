@@ -5,6 +5,7 @@ list(FILTER RENDERER_TEST_SOURCES INCLUDE REGEX "^/")
 get_target_property(RENDERER_TEST_INCLUDES SyntheticBoldTest INCLUDE_DIRECTORIES)
 add_executable(KoreanLayoutTest KoreanLayoutTest.cpp ParserIoStubs.cpp
   ${RENDERER_TEST_SOURCES}
+  ${REPO_ROOT}/src/activities/reader/EpubPageTurns.cpp
   ${REPO_ROOT}/lib/Epub/Epub/ParsedText.cpp
   ${REPO_ROOT}/lib/Epub/Epub/Section.cpp
   ${REPO_ROOT}/lib/Epub/Epub/Page.cpp
@@ -22,6 +23,7 @@ target_include_directories(KoreanLayoutTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/stubs
   ${RENDERER_TEST_INCLUDES}
   ${REPO_ROOT}/test/chapter_html_slim_parser/stubs
+  ${REPO_ROOT}/test/input_frames/stubs
   ${REPO_ROOT}/lib/Epub ${REPO_ROOT}/lib/Serialization ${REPO_ROOT}/lib/XmlParserUtils
   ${REPO_ROOT}/lib/Epub/Epub/hyphenation ${REPO_ROOT}/src
 )

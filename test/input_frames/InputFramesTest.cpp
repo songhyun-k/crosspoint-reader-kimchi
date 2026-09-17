@@ -8,6 +8,9 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "activities/Activity.h"
+#include "activities/reader/EpubPageTurns.h"
+#include "activities/reader/ReaderUtils.h"
 
 namespace {
 std::atomic<bool> countAllocations{false};
@@ -484,4 +487,127 @@ TEST(InputFramesTest, BatteryAdcGuardPreventsSamplerReadsUntilTheSharedAdcIsRele
   }
   pendingSample.get();
   EXPECT_EQ(adcReads.load() - readsBefore, 2u);
+}
+
+TEST(InputFramesTest, PageActionKeepsItsOwnContactDurationWhileAnotherButtonIsHeld) {
+  HalGPIO input;
+  HalDisplay display;
+  GfxRenderer renderer(display);
+  MappedInputManager mapped(input, renderer);
+  SETTINGS.sideButtonLayout = CrossPointSettings::PREV_NEXT;
+  SETTINGS.frontButtonFollowOrientation = false;
+  SETTINGS.frontButtonLeft = HalGPIO::BTN_LEFT;
+  SETTINGS.frontButtonRight = HalGPIO::BTN_RIGHT;
+  SETTINGS.longPressButtonBehavior = CrossPointSettings::CHAPTER_SKIP;
+  SETTINGS.tiltPageTurn = 0;
+  ASSERT_TRUE(startSampler(input));
+  group1 = 2694;  // Confirm is held while the independently wired side button is tapped.
+  for (int i = 0; i < 80; ++i) sample();
+  rawTap();
+  nowMs += 5000;
+  mapped.update();
+  EXPECT_FALSE(ReaderUtils::detectPageTurn(mapped).next);
+  mapped.update();
+  EXPECT_FALSE(ReaderUtils::detectPageTurn(mapped).next);
+  mapped.update();
+  ASSERT_TRUE(mapped.wasReleased(MappedInputManager::Button::PageForward));
+  const auto tap = ReaderUtils::detectPageTurn(mapped);
+  EXPECT_TRUE(tap.next);
+  EXPECT_FALSE(tap.prev);
+  EXPECT_FALSE(tap.fromTilt);
+  EXPECT_EQ(tap.heldMs, 40u);
+  EXPECT_GE(mapped.getHeldTime(), ReaderUtils::SKIP_HOLD_MS);
+  EXPECT_EQ(mapped.getHeldTime(MappedInputManager::Button::PageForward), 40u);
+
+  group2 = 5;
+  for (int i = 0; i < 80; ++i) sample();
+  group2 = 4095;
+  sample();
+  sample();
+  mapped.update();
+  EXPECT_FALSE(ReaderUtils::detectPageTurn(mapped).next);
+  mapped.update();
+  const auto held = ReaderUtils::detectPageTurn(mapped);
+  EXPECT_TRUE(held.next);
+  EXPECT_EQ(held.heldMs, 800u);
+  EXPECT_FALSE(mapped.wasReleased(MappedInputManager::Button::PageForward));
+  EXPECT_FALSE(ReaderUtils::detectPageTurn(mapped).next);
+}
+
+TEST(InputFramesTest, RetainedPageTurnsKeepOrderAcrossFullQueueAndRecovery) {
+  using Action = EpubPageTurns::Action;
+  using Outcome = EpubPageTurns::Outcome;
+  EpubPageTurns turns;
+  ASSERT_TRUE(turns.available());
+  allocationCount = 0;
+  countAllocations = true;
+  bool accepted = true;
+  for (unsigned i = 0; i < EpubPageTurns::CAPACITY; ++i) {
+    accepted &= turns.accept(i % 2 ? Action::PreviousPage : Action::NextPage, 100 + i * 80, 2000);
+  }
+  const bool overflow = turns.accept(Action::NextChapter, 3000, 3000);
+  countAllocations = false;
+  EXPECT_EQ(allocationCount.load(), 0u);
+  EXPECT_TRUE(accepted);
+  EXPECT_FALSE(overflow);
+  auto counts = turns.getCounts();
+  EXPECT_EQ(counts.accepted, EpubPageTurns::CAPACITY);
+  EXPECT_EQ(counts.rejected, 1u);
+  EXPECT_EQ(counts.highWater, EpubPageTurns::CAPACITY);
+  EXPECT_EQ(counts.pending, EpubPageTurns::CAPACITY);
+
+  for (unsigned i = 0; i < EpubPageTurns::CAPACITY; ++i) {
+    EpubPageTurns::Request head{};
+    ASSERT_TRUE(turns.peek(head));
+    EXPECT_EQ(head.sequence, i + 1);
+    EXPECT_EQ(head.capturedAtMs, 100u + i * 80);
+    EXPECT_EQ(head.acceptedAtMs, 2000u);
+    EXPECT_EQ(head.action, i % 2 ? Action::PreviousPage : Action::NextPage);
+    ASSERT_TRUE(turns.peek(head));  // Preparation retries must leave the same head present.
+    EXPECT_EQ(head.sequence, i + 1);
+    turns.complete(i == 0 ? Outcome::Boundary : Outcome::Applied, 4000 + i * 200);
+  }
+  counts = turns.getCounts();
+  EXPECT_EQ(counts.accepted, counts.applied + counts.cancelled + counts.failed + counts.pending);
+  EXPECT_EQ(counts.applied, EpubPageTurns::CAPACITY - 1);
+  EXPECT_EQ(counts.cancelled, 1u);
+  EXPECT_EQ(counts.pending, 0u);
+  EXPECT_EQ(counts.maxWaitMs, 5000u);
+  EXPECT_TRUE(turns.accept(Action::NextChapter, 6000, 6010));
+  EpubPageTurns::Request recovered{};
+  ASSERT_TRUE(turns.peek(recovered));
+  EXPECT_EQ(recovered.sequence, EpubPageTurns::CAPACITY + 1);
+  EXPECT_EQ(recovered.action, Action::NextChapter);
+  turns.cancelPending(Outcome::ContextChanged, 6200);
+  EXPECT_FALSE(turns.peek(recovered));
+}
+
+TEST(InputFramesTest, PageTurnFailureAndContextCancellationAccountForEveryAcceptedRequest) {
+  using Action = EpubPageTurns::Action;
+  using Outcome = EpubPageTurns::Outcome;
+  EpubPageTurns turns;
+  ASSERT_TRUE(turns.accept(Action::PreviousChapter, UINT32_MAX - 30, UINT32_MAX - 10));
+  ASSERT_TRUE(turns.accept(Action::NextPage, UINT32_MAX - 20, UINT32_MAX - 10));
+  turns.cancelPending(Outcome::Failed, 20);
+  auto counts = turns.getCounts();
+  EXPECT_EQ(counts.failed, 2u);
+  EXPECT_EQ(counts.maxWaitMs, 31u);
+  ASSERT_TRUE(turns.accept(Action::NextPage, 30, 40));
+  turns.cancelPending(Outcome::ContextChanged, 50);
+  turns.cancelPending(Outcome::ContextChanged, 60);
+  counts = turns.getCounts();
+  EXPECT_EQ(counts.accepted, 3u);
+  EXPECT_EQ(counts.failed, 2u);
+  EXPECT_EQ(counts.cancelled, 1u);
+  EXPECT_EQ(counts.pending, 0u);
+  EXPECT_EQ(counts.accepted, counts.applied + counts.cancelled + counts.failed + counts.pending);
+
+  inputTest::failQueueCreate = true;
+  EpubPageTurns unavailable;
+  inputTest::failQueueCreate = false;
+  EXPECT_FALSE(unavailable.available());
+  EXPECT_FALSE(unavailable.accept(Action::NextPage, 60, 70));
+  EXPECT_EQ(unavailable.getCounts().accepted, 0u);
+  EXPECT_EQ(unavailable.getCounts().rejected, 1u);
+  EXPECT_EQ(unavailable.getCounts().pending, 0u);
 }

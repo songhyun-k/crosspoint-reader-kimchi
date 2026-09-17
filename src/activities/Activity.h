@@ -30,6 +30,8 @@ class Activity {
   virtual ~Activity() = default;
   virtual void onEnter();
   virtual void onExit();
+  // Called under RenderLock before another activity takes input ownership.
+  virtual void onSuspend() {}
   virtual void loop() {}
 
   virtual void render(RenderLock&&) {}

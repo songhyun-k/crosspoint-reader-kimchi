@@ -371,6 +371,15 @@ unsigned long MappedInputManager::getHeldTime() const {
   return gpio.getHeldTime();
 }
 
+unsigned long MappedInputManager::getHeldTime(const Button button) const {
+  const uint8_t mask = buttonMask(button);
+  unsigned long heldMs = 0;
+  for (uint8_t index = 0; index < HalGPIO::BUTTON_COUNT; ++index) {
+    if (mask & (1u << index)) heldMs = std::max(heldMs, gpio.getButtonHeldTime(index));
+  }
+  return heldMs;
+}
+
 MappedInputManager::Labels MappedInputManager::mapLabels(const char* back, const char* confirm, const char* previous,
                                                          const char* next) const {
   // Swap previous/next labels to match the page turn direction swap in INVERTED and LANDSCAPE_CCW.
