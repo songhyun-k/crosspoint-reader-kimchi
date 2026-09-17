@@ -1574,6 +1574,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   renderStatusBar();
   const auto tBwRender = millis();
 
+  if (needsTextGrayscale && !pageHasImages &&
+      ReaderUtils::renderFactoryAntiAliased(renderer, [&]() { renderGrayscalePass(); })) {
+    pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+    LOG_DBG("ERS", "Page render (factory): prewarm=%lums bw_render=%lums gray=%lums total=%lums", tPrewarm - t0,
+            tBwRender - tPrewarm, millis() - tBwRender, millis() - t0);
+    return;
+  }
+
   if (pageHasImages) {
     // Image pages use one base refresh before the grayscale pass. FAST leaves
     // the panel receptive to the gray waveform; pending cleanup still honors
