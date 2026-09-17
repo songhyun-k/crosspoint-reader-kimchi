@@ -40,6 +40,8 @@ class FontCacheManager {
    public:
     explicit PrewarmScope(FontCacheManager& manager);
     ~PrewarmScope();
+    // Keep the scope alive while the owner resumes prewarmSome(), then draws.
+    void beginPrewarm();
     void endScanAndPrewarm();
     // Transfer the scan to the manager; its owner resumes it between render passes.
     void deferPrewarm();

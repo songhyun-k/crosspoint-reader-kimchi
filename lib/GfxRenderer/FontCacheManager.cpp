@@ -292,8 +292,10 @@ bool FontCacheManager::prewarmSome(const uint16_t maxUnits) {
   return false;
 }
 
+void FontCacheManager::PrewarmScope::beginPrewarm() { manager_->beginPrewarm(false); }
+
 void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
-  manager_->beginPrewarm(false);
+  beginPrewarm();
   while (!manager_->prewarmSome(UINT16_MAX)) {
   }
 }

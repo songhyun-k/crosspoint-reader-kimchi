@@ -645,6 +645,55 @@ TEST_F(SyntheticBoldTest, DeferredFontGroupsPreserveIoAndRasterAndCancelBeforeRe
   EXPECT_EQ(panel.pixels, expected);
   EXPECT_EQ(decompressor.getStats().cacheMisses, 0u);
 
+  // Required rendering keeps its scope alive across worker returns. Scanning
+  // and preparation must leave the currently displayed framebuffer intact.
+  cache.releaseSdFontCaches();
+  renderer.clearScreen(0x55);
+  const auto beforePreparation = panel.pixels;
+  const auto requiredReads = storage_test::reads;
+  const auto requiredBytes = storage_test::readBytes;
+  const auto requiredSeeks = storage_test::seeks;
+  {
+    auto scope = cache.createPrewarmScope();
+    draw();
+    renderer.drawLine(0, 0, 100, 100, 2, true);
+    renderer.fillRect(10, 10, 80, 40, true);
+    scope.beginPrewarm();
+    ASSERT_TRUE(cache.isPrewarming());
+    for (unsigned step = 0; cache.isPrewarming() && step < 2048; ++step) cache.prewarmSome(1);
+    ASSERT_FALSE(cache.isPrewarming());
+    EXPECT_EQ(storage_test::reads - requiredReads, batchReads);
+    EXPECT_EQ(storage_test::readBytes - requiredBytes, batchBytes);
+    EXPECT_EQ(storage_test::seeks - requiredSeeks, batchSeeks);
+    EXPECT_EQ(panel.pixels, beforePreparation);
+    EXPECT_NE(sd.getEpdFont()->data->glyph, nullptr);
+    renderer.clearScreen();
+    draw();
+    EXPECT_EQ(panel.pixels, expected);
+  }
+  EXPECT_FALSE(cache.isPrewarming());
+  EXPECT_EQ(storage_test::openHandles, 0u);
+
+  // Cancelling before scope destruction must not drain unfinished work.
+  for (const int id : {6, 100}) {
+    cache.releaseSdFontCaches();
+    size_t readsAtCancel = 0;
+    {
+      auto scope = cache.createPrewarmScope();
+      renderer.drawText(id, 10, 10, id == 6 ? "한글" : "AB", true);
+      scope.beginPrewarm();
+      EXPECT_FALSE(cache.prewarmSome(1));
+      EXPECT_TRUE(id == 6 ? decompressor.isPrewarming() : sd.isPrewarming());
+      readsAtCancel = storage_test::reads;
+      cache.cancelPrewarm();
+    }
+    EXPECT_EQ(storage_test::reads, readsAtCancel);
+    EXPECT_FALSE(cache.isPrewarming());
+    EXPECT_FALSE(decompressor.isPrewarming());
+    EXPECT_FALSE(sd.isPrewarming());
+    EXPECT_EQ(storage_test::openHandles, 0u);
+  }
+
   for (const int id : {6, 100}) {
     cache.releaseSdFontCaches();
     {

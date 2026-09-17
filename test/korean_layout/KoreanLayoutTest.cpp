@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "activities/reader/EpubPageTurns.h"
+#include "activities/reader/EpubReaderUtils.h"
 #include "test/xtc_memory/SdFontFixture.h"
 
 namespace {
@@ -659,6 +660,19 @@ TEST_F(KoreanLayoutTest, IdleChunksPrewarmBuiltPagesAndFinishWithoutMovingTheRea
   spec.viewportHeight = 160;
   Section section(epub, 0, renderer);
   ASSERT_TRUE(section.startBuild(spec));
+  using Action = EpubReaderUtils::IdleAction;
+  EpubReaderUtils::IdleFacts idle{
+      .section = &section, .canStartBuild = true, .hasRendered = true, .freeHeap = 32 * 1024, .maxBlock = 16 * 1024};
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).delayMs, 0u);
+  --idle.freeHeap;
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).delayMs, 250u);
+  ++idle.freeHeap;
+  --idle.maxBlock;
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).delayMs, 250u);
+  ++idle.maxBlock;
+  idle.inputActive = true;
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).action, Action::None);
+  idle.inputActive = false;
   const size_t reads = storage_test::reads;
   ASSERT_TRUE(section.buildSomeMore(2, 1));
   EXPECT_EQ(storage_test::reads, reads + 1);  // yields even through a long comment
@@ -681,14 +695,45 @@ TEST_F(KoreanLayoutTest, IdleChunksPrewarmBuiltPagesAndFinishWithoutMovingTheRea
     ASSERT_TRUE(Storage.openFileForWrite("TEST", "before.page", file));
     ASSERT_TRUE(next->serialize(file));
   }
+  bool sawRetained = false;
+  bool sawWindowWait = false;
   // Steps now include paragraph work and XML resumes, not only 1 KiB input chunks.
   for (int tick = 0; tick < paragraphCount * 8 && section.isBuilding(); ++tick) {
+    idle.freeHeap = 32 * 1024;
+    if (section.hasRetainedBuildOperation()) {
+      sawRetained = true;
+      idle.freeHeap = 1;
+      EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).action, Action::Section);
+      EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).delayMs, 0u);
+    } else if (section.pageCount >= 5) {
+      sawWindowWait = true;
+      idle.idleMs = 999;
+      EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).delayMs, 1u);
+      idle.idleMs = 1000;
+      EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).delayMs, 0u);
+    }
     ASSERT_TRUE(section.buildSomeMore(2, 1));
   }
+  EXPECT_TRUE(sawRetained);
+  EXPECT_TRUE(sawWindowWait);
   EXPECT_TRUE(section.isBuildComplete());
   EXPECT_FALSE(section.isBuilding());
   EXPECT_EQ(section.currentPage, 0);  // finishes beyond the five-page window while stationary
   ASSERT_GT(section.pageCount, 5);
+  idle.freeHeap = 32 * 1024;
+  idle.maxBlock = 16 * 1024 + 1;
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).action, Action::None);
+  idle.scanNextPage = true;
+  idle.idleMs = 399;
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).action, Action::ScanNextPage);
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).delayMs, 1u);
+  idle.idleMs = 400;
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).delayMs, 0u);
+  idle.freeHeap = 24 * 1024;
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).delayMs, 250u);
+  idle.fontPending = true;
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).action, Action::Font);
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).delayMs, 0u);
   Section reopened(epub, 0, renderer);
   ASSERT_TRUE(reopened.loadSectionFile(spec));
   EXPECT_FALSE(reopened.isPartial());
@@ -1148,7 +1193,7 @@ TEST_F(KoreanLayoutTest, RetainedTurnsWaitForRealPartialPagesAndAccountForChapte
     EXPECT_EQ(turns.applyTo(building, spine, 2, jump, 200), Step::NeedsNextPage);
     EXPECT_EQ(building.currentPage, 0);
     EXPECT_EQ(spine, 0);
-    ASSERT_TRUE(building.buildSomeMore(1));
+    ASSERT_TRUE(building.buildSomeMore(EpubReaderUtils::PARTIAL_REBUILD_START_MARGIN + 1));
     ASSERT_FALSE(building.isBuildComplete());
     building.suspendBuild();
   }
@@ -1156,6 +1201,18 @@ TEST_F(KoreanLayoutTest, RetainedTurnsWaitForRealPartialPagesAndAccountForChapte
   ASSERT_TRUE(section.loadSectionFile(spec));
   ASSERT_TRUE(section.isPartial());
   const int watermark = section.pageCount;
+  EpubReaderUtils::IdleFacts idle{.section = &section,
+                                  .canStartBuild = true,
+                                  .hasRendered = true,
+                                  .idleMs = 1000,
+                                  .freeHeap = 32 * 1024,
+                                  .maxBlock = 16 * 1024};
+  ASSERT_GT(watermark, EpubReaderUtils::PARTIAL_REBUILD_START_MARGIN);
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).action, EpubReaderUtils::IdleAction::None);
+  section.currentPage = watermark - EpubReaderUtils::PARTIAL_REBUILD_START_MARGIN;
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).action, EpubReaderUtils::IdleAction::StartSection);
+  idle.canStartBuild = false;
+  EXPECT_EQ(EpubReaderUtils::nextIdleWork(idle).action, EpubReaderUtils::IdleAction::None);
   section.currentPage = watermark - 1;
   EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 400), Step::NeedsNextPage);
   EXPECT_EQ(turns.applyTo(section, spine, 2, jump, 600), Step::NeedsNextPage);

@@ -4,6 +4,7 @@
 #include <Epub/FootnoteEntry.h>
 #include <Epub/PageLink.h>
 #include <Epub/Section.h>
+#include <FontCacheManager.h>
 
 #include <atomic>
 #include <memory>
@@ -17,6 +18,10 @@
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
 #include "components/OptionPopup.h"
+
+namespace EpubReaderUtils {
+struct IdleWork;
+}
 
 class EpubReaderActivity final : public ReaderActivity {
   struct Snapshot {
@@ -39,7 +44,7 @@ class EpubReaderActivity final : public ReaderActivity {
     bool dictionaryMessage = false;
     bool automatic = false;
     bool paused = false;
-    bool needsWork = false;
+    std::optional<uint32_t> wakeAt;
   };
   enum class Control {
     Open,
@@ -130,11 +135,21 @@ class EpubReaderActivity final : public ReaderActivity {
   std::optional<uint32_t> cachedVisibleTextOffset;
   std::optional<uint32_t> currentPageVisibleOffset;
   std::optional<uint32_t> pendingOffsetJump;
+  static constexpr uint32_t MIN_MANUAL_TURN_GAP_MS = 200;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   EpubPageTurns pageTurns;
-  // Render prepares the retained head's next page without advancing position.
-  bool prepareNextPage = false;
+  enum class PageTarget : uint8_t { Current, Navigation, NextPage };
+  enum class Preparation : uint8_t { Pending, Ready, Error };
+  PageTarget pageTarget = PageTarget::Current;
+  std::unique_ptr<Page> pendingRenderPage;
+  std::optional<FontCacheManager::PrewarmScope> renderFontScope;
+  std::optional<uint32_t> buildStartedAt;
+  uint32_t prewarmStartedAt = 0;
+  Preparation prepareSection(const ReaderRenderSpec& spec);
+  void clearPendingNavigation();
+  void retirePagePreparation();
+  void retireSection();
   void processPageTurns();
   void cancelPageTurns(EpubPageTurns::Outcome outcome, const char* reason);
   bool pendingPercentJump = false;
@@ -212,14 +227,10 @@ class EpubReaderActivity final : public ReaderActivity {
 
   static constexpr int BUILD_PAGES_PER_CHUNK = 8;
   static constexpr int BACKGROUND_BUILD_PAGES_PER_TICK = 2;
-  static constexpr size_t BACKGROUND_BUILD_MIN_FREE_HEAP = 32 * 1024;
-  static constexpr size_t BACKGROUND_BUILD_MIN_MAX_ALLOC = 16 * 1024;
-  bool buildTickHeapGate();
+  EpubReaderUtils::IdleWork idleWork(uint32_t nowMs) const;
+  std::optional<uint32_t> nextWakeAt(uint32_t nowMs) const;
   bool hasInputActivity() const;
   void runBackgroundWork();
-  static constexpr size_t RENDER_MIN_FREE_HEAP = 24 * 1024;
-  static constexpr int BUILD_WINDOW_AHEAD = 5;
-  static constexpr int PARTIAL_REBUILD_START_MARGIN = 15;
   static constexpr int BUILD_POPUP_PAGE_THRESHOLD = 20;
   static constexpr size_t BUILD_POPUP_BYTE_THRESHOLD = 96 * 1024;
   static constexpr unsigned long BUILD_POPUP_DEADLINE_MS = 1000;
@@ -287,8 +298,7 @@ class EpubReaderActivity final : public ReaderActivity {
 
  public:
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
-                              bool allowFastInitialRefresh)
-      : ReaderActivity("EpubReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
+                              bool allowFastInitialRefresh);
   ~EpubReaderActivity() override;
 
   void loop() override;

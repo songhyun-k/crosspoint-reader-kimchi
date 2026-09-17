@@ -44,27 +44,49 @@ void EpubReaderActivity::publishSnapshot() {
                          0.5f),
         0, 100);
   }
-  value.needsWork =
-      showBookmarkMessage || showDictionaryMessage ||
-      (!readerPaused &&
-       (automaticPageTurnActive || pageTurns.getCounts().pending != 0 ||
-        (renderer.getFontCacheManager() && renderer.getFontCacheManager()->isPrewarming()) ||
-        (section && (section->isBuilding() || (section->isPartial() && !partialRebuildStartFailed) ||
-                     (renderer.getFontCacheManager() && section->currentPage + 1 < section->pageCount &&
-                      (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage))))));
+  value.wakeAt = nextWakeAt(millis());
   taskENTER_CRITICAL(&snapshotMux);
   snapshot = value;
   taskEXIT_CRITICAL(&snapshotMux);
 }
 
+std::optional<uint32_t> EpubReaderActivity::nextWakeAt(const uint32_t nowMs) const {
+  if (renderRetired || !epub || (readerPaused && overlay == Overlay::None)) return std::nullopt;
+  if (redrawRequested.load()) return nowMs;
+  std::optional<uint32_t> delay;
+  const auto due = [&](uint32_t wait) {
+    if (!delay || wait < *delay) delay = wait;
+  };
+  const auto remaining = [nowMs](uint32_t start, uint32_t duration) {
+    const uint32_t elapsed = nowMs - start;
+    return elapsed >= duration ? 0 : duration - elapsed;
+  };
+  if (showBookmarkMessage) due(remaining(bookmarkMessageTime, ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS));
+  if (showDictionaryMessage) due(remaining(dictionaryMessageTime, ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS));
+  if (!readerPaused) {
+    if (pageTurns.getCounts().pending != 0) {
+      due(remaining(lastPageTurnTime, MIN_MANUAL_TURN_GAP_MS));
+    } else {
+      if (automaticPageTurnActive && !inputActive.load()) due(remaining(lastPageTurnTime, pageTurnDuration));
+      const auto idle = idleWork(nowMs);
+      if (idle.action != EpubReaderUtils::IdleAction::None) due(idle.delayMs);
+    }
+  }
+  return delay ? std::make_optional(nowMs + *delay) : std::nullopt;
+}
+
 void EpubReaderActivity::runCommand(Command& command) {
   assert(pendingControl.load() == nullptr && "Reader control command already pending");
   pendingControl.store(&command, std::memory_order_release);
-  if (!activityManager.requestUpdateAndWait()) {
-    pendingControl.store(nullptr);
-    LOG_ERR("ERS", "Reader control command has no render task");
-    return;
-  }
+  do {
+    if (!activityManager.requestUpdateAndWait()) {
+      pendingControl.store(nullptr);
+      LOG_ERR("ERS", "Reader control command has no render task");
+      return;
+    }
+    // A page-dependent command can require several bounded preparation turns.
+    // Its stack-owned payload stays alive until the worker consumes the slot.
+  } while (pendingControl.load(std::memory_order_acquire) == &command);
   const auto state = readSnapshot();
   if (inputContext != state.context) {
     mappedInput.discardPendingInput();
@@ -74,7 +96,8 @@ void EpubReaderActivity::runCommand(Command& command) {
 
 void EpubReaderActivity::changeReaderContext() {
   ++readerContext;
-  if (auto* cache = renderer.getFontCacheManager()) cache->cancelPrewarm();
+  if (pageTarget == PageTarget::NextPage) pageTarget = PageTarget::Current;
+  retirePagePreparation();
   idlePrewarmSpine = idlePrewarmPage = -1;
   currentPageVisibleOffset.reset();
   cancelPageTurns(EpubPageTurns::Outcome::ContextChanged, "reader context");
@@ -86,13 +109,13 @@ void EpubReaderActivity::pauseReader() {
 }
 
 void EpubReaderActivity::releaseSection() {
-  if (section) {
+  if (section && pageTarget != PageTarget::Navigation) {
     rememberCurrentContentOffset();
     cachedSpineIndex = currentSpineIndex;
     cachedChapterTotalPageCount = section->pageCount;
     nextPageNumber = section->currentPage;
   }
-  section.reset();
+  retireSection();
 }
 
 void EpubReaderActivity::executeCommand(Command& command) {
@@ -104,7 +127,15 @@ void EpubReaderActivity::executeCommand(Command& command) {
       command.succeeded = loadBookOnRender();
       break;
     case Control::Pause:
-      if (!readerPaused) changeReaderContext();
+      if (!readerPaused)
+        changeReaderContext();
+      else
+        retirePagePreparation();
+      // Child font settings can unload the font referenced by paragraph work.
+      if (section && section->isBuilding()) {
+        section->suspendBuild();
+        if (!section->isPartial() && !section->isBuildComplete()) retireSection();
+      }
       readerPaused = true;
       break;
     case Control::Resume:
@@ -215,7 +246,7 @@ void EpubReaderActivity::executeCommand(Command& command) {
         break;
       }
       ImageBlock::setExtractor(nullptr, nullptr);
-      section.reset();
+      retireSection();
       epub.reset();
       break;
     }
@@ -223,7 +254,7 @@ void EpubReaderActivity::executeCommand(Command& command) {
       if (epub && section) {
         const int page = section->currentPage;
         const int count = section->pageCount;
-        section.reset();
+        retireSection();
         epub->clearCache();
         epub->setupCacheDir();
         if (!saveProgress(currentSpineIndex, page, count)) LOG_ERR("ERS", "Failed to save progress before cache clear");
@@ -233,6 +264,7 @@ void EpubReaderActivity::executeCommand(Command& command) {
       pendingScreenshot = true;
       break;
     case Control::ReturnFromEnd:
+      clearPendingNavigation();
       changeReaderContext();
       if (epub && epub->getSpineItemsCount() > 0) {
         currentSpineIndex = epub->getSpineItemsCount() - 1;
@@ -248,12 +280,13 @@ bool EpubReaderActivity::jumpToChapterOnRender(const int spineIndex, const std::
     LOG_ERR("ERS", "Invalid chapter destination: %d", spineIndex);
     return false;
   }
+  clearPendingNavigation();
   changeReaderContext();
   clearDeferredReposition();
   currentSpineIndex = spineIndex;
   pendingAnchor = anchor;
   nextPageNumber = 0;
-  section.reset();
+  retireSection();
   return true;
 }
 
@@ -274,41 +307,69 @@ void EpubReaderActivity::requestUpdate(const bool immediate) {
 
 void EpubReaderActivity::render(RenderLock&& lock) {
   if (renderRetired) return;
-  if (auto* command = pendingControl.exchange(nullptr, std::memory_order_acquire)) {
+  if (auto* command = pendingControl.load(std::memory_order_acquire)) {
+    const bool needsPage = command->type == Control::Bookmark || command->type == Control::DictionaryPage ||
+                           command->type == Control::Footnotes || command->type == Control::QrText ||
+                           command->type == Control::Sync;
+    if (needsPage && !atEndOnRender() &&
+        (redrawRequested.load() || !section || pageTarget == PageTarget::Navigation || pendingRenderPage ||
+         (section && section->currentPage >= section->pageCount && (section->isBuilding() || section->isPartial())))) {
+      // These actions refer to the requested position, not an uninitialised
+      // page zero in a newly created Section. Pause/navigation still preempt it.
+      redrawRequested.store(false);
+      renderBook();
+      if (redrawRequested.load()) {
+        publishSnapshot();
+        lock.unlock();
+        vTaskDelay(1);
+        return;
+      }
+      if (!section) {
+        command->succeeded = false;
+        pendingControl.store(nullptr, std::memory_order_release);
+        LOG_ERR("ERS", "Reader command failed while preparing its page");
+        publishSnapshot();
+        return;
+      }
+    }
+    pendingControl.store(nullptr, std::memory_order_release);
     executeCommand(*command);
     publishSnapshot();
-    // The control notification may have coalesced with a pending repaint.
+    // Main finishes its UI transition after the command acknowledgement.
     if (redrawRequested.load()) Activity::requestUpdate();
     return;
   }
-  if (!epub) return;
-  // Paused readers behind a child UI retain their repaint until main resumes them.
-  if (readerPaused && overlay == Overlay::None) {
-    publishSnapshot();
-    return;
-  }
-  if (showBookmarkMessage && millis() - bookmarkMessageTime >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
-    showBookmarkMessage = false;
-    redrawRequested.store(true);
-  }
-  if (showDictionaryMessage && millis() - dictionaryMessageTime >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
-    showDictionaryMessage = false;
-    redrawRequested.store(true);
-  }
-  if (!readerPaused) {
-    if (automaticPageTurnActive && pageTurns.getCounts().pending == 0 && !inputActive.load() &&
-        millis() - lastPageTurnTime >= pageTurnDuration) {
-      pageTurns.accept(EpubPageTurns::Action::NextPage, millis(), millis(), readerContext);
+  if (epub && (!readerPaused || overlay != Overlay::None)) {
+    if (showBookmarkMessage && millis() - bookmarkMessageTime >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
+      showBookmarkMessage = false;
+      redrawRequested.store(true);
     }
-    processPageTurns();
-  }
-  if (redrawRequested.exchange(false)) {
-    publishSnapshot();
-    ReaderActivity::render(std::move(lock));
-  } else if (!readerPaused && pageTurns.getCounts().pending == 0) {
-    runBackgroundWork();
+    if (showDictionaryMessage && millis() - dictionaryMessageTime >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
+      showDictionaryMessage = false;
+      redrawRequested.store(true);
+    }
+    if (!readerPaused) {
+      if (automaticPageTurnActive && pageTurns.getCounts().pending == 0 && !inputActive.load() &&
+          millis() - lastPageTurnTime >= pageTurnDuration) {
+        pageTurns.accept(EpubPageTurns::Action::NextPage, millis(), millis(), readerContext);
+      }
+      processPageTurns();
+    }
+    if (redrawRequested.exchange(false)) {
+      publishSnapshot();
+      ReaderActivity::render(std::move(lock));
+    } else if (!readerPaused && pageTurns.getCounts().pending == 0) {
+      runBackgroundWork();
+    }
   }
   publishSnapshot();
+  const auto wakeAt = readSnapshot().wakeAt;
+  if (wakeAt && static_cast<int32_t>(static_cast<uint32_t>(millis()) - *wakeAt) >= 0) {
+    // Real continuation work must let main, input and the idle watchdog run.
+    lock.unlock();
+    vTaskDelay(1);
+    Activity::requestUpdate(true);
+  }
 }
 
 bool EpubReaderActivity::loadBook() {
