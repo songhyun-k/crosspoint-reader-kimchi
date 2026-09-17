@@ -74,6 +74,26 @@ unsigned notifications(StaticTask_t& task) {
 // Like firmware, this manager is process-lifetime; tests use the native Release runner.
 ActivityManager activityManager(managerRenderer, managerMappedInput);
 
+TEST(RenderLifetimeTest, ResultRecipientCanConsumePayloadWithoutCopying) {
+  FootnoteEntry entry;
+  std::strcpy(entry.number, "1");
+  std::strcpy(entry.href, "#note");
+  ActivityResult result{FootnoteResult{"#note", {entry}}};
+  const auto* entries = std::get<FootnoteResult>(result.data).footnotes.data();
+  ActivityResultHandler observer = [](const ActivityResult& value) {
+    EXPECT_EQ(std::get<FootnoteResult>(value.data).href, "#note");
+  };
+  observer(std::move(result));
+  std::vector<FootnoteEntry> received;
+  ActivityResultHandler consumer = [&](ActivityResult&& value) {
+    received = std::move(std::get<FootnoteResult>(value.data).footnotes);
+  };
+  consumer(std::move(result));
+  EXPECT_EQ(received.data(), entries);
+  ASSERT_EQ(received.size(), 1u);
+  EXPECT_STREQ(received.front().href, "#note");
+}
+
 TEST(RenderLifetimeTest, OlderRenderCannotAcknowledgeANewWaitOrRetirement) {
   const auto trace = std::make_shared<RenderTrace>();
   const auto cleanup = std::make_shared<RenderTrace>();

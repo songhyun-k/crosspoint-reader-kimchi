@@ -2,6 +2,8 @@
 
 #include <InflateReader.h>
 
+#include <memory>
+
 #include "EpdFontData.h"
 
 class FontDecompressor {
@@ -9,7 +11,7 @@ class FontDecompressor {
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
   static constexpr uint8_t MAX_PAGE_SLOTS = 4;  // One per font style (R/B/I/BI)
 
-  FontDecompressor() = default;
+  FontDecompressor();
   ~FontDecompressor();
 
   bool init();
@@ -32,6 +34,12 @@ class FontDecompressor {
   // Each group is decompressed once into a temp buffer; only needed glyphs are kept.
   // Returns the number of glyphs that couldn't be loaded (0 on full success).
   int prewarmCache(const EpdFontData* fontData, const char* utf8Text);
+  static constexpr int PREWARM_PENDING = -3;
+  int beginPrewarm(const EpdFontData* fontData, const char* utf8Text);
+  // A unit aligns up to 64 font records, inflates one group, or packs one glyph.
+  int prewarmSome(uint16_t maxUnits);
+  void cancelPrewarm();
+  bool isPrewarming() const { return prewarm != nullptr; }
 
   struct Stats {
     uint32_t cacheHits = 0;
@@ -68,6 +76,8 @@ class FontDecompressor {
   };
   PageSlot pageSlots[MAX_PAGE_SLOTS] = {};
   uint8_t pageSlotCount = 0;
+  struct PrewarmState;
+  std::unique_ptr<PrewarmState> prewarm;
 
   // Hot group: last decompressed group (byte-aligned) for non-prewarmed fallback path.
   // Kept in byte-aligned format; individual glyphs are compacted on demand into hotGlyphBuf.

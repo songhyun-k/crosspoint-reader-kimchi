@@ -14,6 +14,9 @@ inline std::unordered_map<std::string, std::vector<uint8_t>> files;
 inline size_t shortReadAt = std::numeric_limits<size_t>::max();
 inline bool negativeRead = false;
 inline size_t reads = 0;
+inline size_t readBytes = 0;
+inline size_t seeks = 0;
+inline size_t lastReadOffset = 0;
 inline size_t largestRead = 0;
 inline size_t openHandles = 0;
 inline void reset() {
@@ -21,6 +24,7 @@ inline void reset() {
   shortReadAt = std::numeric_limits<size_t>::max();
   negativeRead = false;
   reads = largestRead = 0;
+  readBytes = seeks = lastReadOffset = 0;
 }
 }  // namespace storage_test
 
@@ -41,6 +45,7 @@ class HalFile {
   }
   int read(void* dest, size_t count) {
     ++storage_test::reads;
+    storage_test::lastReadOffset = offset_;
     storage_test::largestRead = std::max(storage_test::largestRead, count);
     if (!bytes_ || offset_ > bytes_->size()) return -1;
     if (offset_ == storage_test::shortReadAt) {
@@ -50,6 +55,7 @@ class HalFile {
     count = std::min(count, bytes_->size() - offset_);
     if (count > 0) std::memcpy(dest, bytes_->data() + offset_, count);
     offset_ += count;
+    storage_test::readBytes += count;
     return static_cast<int>(count);
   }
   size_t write(const void* source, const size_t count) {
@@ -67,6 +73,7 @@ class HalFile {
   bool flush() const { return isOpen(); }
   bool seekCur(const size_t bytes) { return seek64(offset_ + bytes); }
   bool seek64(uint64_t offset) {
+    ++storage_test::seeks;
     if (!bytes_ || offset > bytes_->size()) return false;
     offset_ = static_cast<size_t>(offset);
     return true;

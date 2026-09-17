@@ -106,7 +106,7 @@ void ActivityManager::loop() {
           auto handler = std::move(currentActivity->resultHandler);
           currentActivity->resultHandler = nullptr;
           lock.unlock();  // Handler may acquire its own lock
-          handler(pendingResult);
+          handler(std::move(pendingResult));
         }
 
         // Request an update to ensure the popped activity gets re-rendered

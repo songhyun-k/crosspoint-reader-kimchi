@@ -316,20 +316,12 @@ void EpubReaderActivity::openDictionaryWordSelect() {
 void EpubReaderActivity::openFootnotes(const bool followSingle) {
   pauseReader();
   Command command{Control::Footnotes};
+  command.flag = followSingle;
   runCommand(command);
-  if (followSingle && command.footnotes.size() == 1) {
-    command.text = command.footnotes.front().href;
-    command.type = Control::RestoreFootnotes;
-    runCommand(command);
-    command.type = Control::Href;
-    command.flag = true;
-    runCommand(command);
-    requestUpdate();
-    onResume();
-  } else if (!command.footnotes.empty()) {
+  if (!command.footnotes.empty()) {
     startActivityForResult(
         std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, std::move(command.footnotes)),
-        [this, followSingle](ActivityResult& result) {
+        [this, followSingle](ActivityResult&& result) {
           auto& note = std::get<FootnoteResult>(result.data);
           Command command{Control::RestoreFootnotes};
           command.footnotes = std::move(note.footnotes);
@@ -342,6 +334,7 @@ void EpubReaderActivity::openFootnotes(const bool followSingle) {
           requestUpdate();
         });
   } else {
+    requestUpdate();
     onResume();
   }
 }
@@ -354,6 +347,15 @@ bool EpubReaderActivity::hasInputActivity() const {
 
 void EpubReaderActivity::runBackgroundWork() {
   const bool allowSpeculativeWork = !inputActive.load();
+  auto* fontCache = renderer.getFontCacheManager();
+  if (fontCache && fontCache->isPrewarming()) {
+    // ponytail: fixed work quantum; tune only with measured target SD latency.
+    constexpr uint16_t PREWARM_UNITS_PER_TICK = 16;
+    if (allowSpeculativeWork && pageTurns.getCounts().pending == 0 && pendingControl.load() == nullptr) {
+      fontCache->prewarmSome(PREWARM_UNITS_PER_TICK);
+    }
+    return;
+  }
 
   constexpr unsigned long IDLE_FINISH_DELAY_MS = 1000;
   const bool finishWhileIdle = lastRenderCompleteMs != 0 && millis() - lastRenderCompleteMs > IDLE_FINISH_DELAY_MS;
@@ -397,10 +399,10 @@ void EpubReaderActivity::runBackgroundWork() {
           const auto t0 = millis();
           auto scope = fcm->createPrewarmScope();
           p->render(renderer, SETTINGS.getReaderFontId(), 0, 0);
-          scope.endScanAndPrewarm();
+          scope.deferPrewarm();
           idlePrewarmSpine = currentSpineIndex;
           idlePrewarmPage = section->currentPage;
-          LOG_DBG("ERS", "Idle prewarm: page %d in %lums", nextPage, millis() - t0);
+          LOG_DBG("ERS", "Idle font scan: page %d in %lums", nextPage, millis() - t0);
         }
       }
     }
@@ -920,8 +922,7 @@ void EpubReaderActivity::processPageTurns() {
   }
   lastPageTurnTime = millis();
   if (atEndOnRender()) {
-    cancelPageTurns(EpubPageTurns::Outcome::ContextChanged, "end of book");
-    ++readerContext;
+    changeReaderContext();
   }
   redrawRequested.store(true);
 }
@@ -1354,6 +1355,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   } pxcSlotGuard;
 
   auto* fcm = renderer.getFontCacheManager();
+  if (fcm->isPrewarming() && idlePrewarmSpine == currentSpineIndex && idlePrewarmPage + 1 == section->currentPage) {
+    // This speculative target is now requested; finish its remaining glyphs.
+    while (!fcm->prewarmSome(UINT16_MAX)) {
+    }
+  }
   auto scope = fcm->createPrewarmScope();
   page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
   // Scan the status bar too: a CJK book/chapter title redirected to the SD

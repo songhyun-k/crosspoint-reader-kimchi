@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,12 +23,9 @@
 class SdCardFont {
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
-  // prewarmStyle: the bitmap arena did not fit the largest free block.
-  // Distinct from a missed-glyph count so the caller can retry smaller.
-  static constexpr int PREWARM_ARENA_TOO_LARGE = -2;
   static constexpr uint8_t MAX_STYLES = 4;
 
-  SdCardFont() = default;
+  SdCardFont();
   ~SdCardFont();
   // Owns raw buffers freed in dtor — no shallow-copy semantics. Make any
   // accidental pass-by-value or move a compile-time error.
@@ -63,6 +61,14 @@ class SdCardFont {
   using TextGetter = const char* (*)(const void* ctx, uint32_t index);
   int prewarm(TextGetter getter, const void* ctx, uint32_t textCount, uint8_t styleMask = 0x0F,
               bool metadataOnly = false, bool loadKernLig = true);
+
+  // A unit finishes one glyph/bitmap/kern-row read, or one bounded preparation phase.
+  // Only the caller owning font rendering may resume or cancel this operation.
+  static constexpr int PREWARM_PENDING = -3;
+  bool beginPrewarm(const char* utf8Text, uint8_t styleMask = 0x0F);
+  int prewarmSome(uint16_t maxUnits);
+  void cancelPrewarm();
+  bool isPrewarming() const { return prewarm_ != nullptr; }
 
   // Build a compact advance-only table for layout measurement.
   // Extracts ALL unique codepoints from words (no MAX_PAGE_GLYPHS cap),
@@ -311,6 +317,15 @@ class SdCardFont {
   uint32_t contentHash_ = 0;
   bool loaded_ = false;
 
+  struct PrewarmState;
+  std::unique_ptr<PrewarmState> prewarm_;
+  bool beginPrewarm(TextGetter getter, const void* ctx, uint32_t textCount, uint8_t styleMask, bool metadataOnly,
+                    bool loadKernLig);
+  int preparePrewarmStyle(PrewarmState& work);
+  void finishPrewarmStyle(PrewarmState& work, int missed);
+  void publishPrewarmStyle(PrewarmState& work);
+  bool prepareMiniKern(PrewarmState& work);
+
   // Per-style helpers
   void freeStyleMiniData(PerStyle& s);
   // Per-scope variant: drop the page's data, keep the allocations (see the
@@ -320,8 +335,7 @@ class SdCardFont {
   void freeStyleAll(PerStyle& s);
   void freeStyleKernLigatureData(PerStyle& s);
   void freeStyleMiniKern(PerStyle& s);
-  bool loadStyleKernLigatureData(PerStyle& s);
-  bool buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, uint32_t cpCount);
+  int loadStyleKernLigatureSome(PrewarmState& work);
   void applyKernLigaturePointers(PerStyle& s, EpdFontData& data) const;
   void applyGlyphMissCallback(uint8_t styleIdx);
   int32_t findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const;
@@ -329,7 +343,6 @@ class SdCardFont {
   template <typename Iter>
   int buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, bool includeHyphen, uint8_t styleMask,
                              const char* extraText = nullptr);
-  int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly, bool loadKernLig);
 
   // Global helpers
   void freeAll();

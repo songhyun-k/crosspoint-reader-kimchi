@@ -7,6 +7,11 @@
 
 class FontDecompressor {
  public:
+  static constexpr int PREWARM_PENDING = -3;
+  int beginPrewarm(const EpdFontData* font, const char* text) { return prewarmCache(font, text); }
+  int prewarmSome(uint16_t) { return 0; }
+  void cancelPrewarm() {}
+  bool isPrewarming() const { return false; }
   struct PrewarmCall {
     const EpdFontData* fontData = nullptr;
     char text[32] = {};

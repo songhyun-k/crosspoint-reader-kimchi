@@ -5,6 +5,13 @@
 
 class SdCardFont {
  public:
+  static constexpr int PREWARM_PENDING = -3;
+  bool beginPrewarm(const char* text, uint8_t styleMask) {
+    prewarm(text, styleMask);
+    return true;
+  }
+  int prewarmSome(uint16_t) { return 0; }
+  void cancelPrewarm() {}
   struct PrewarmCall {
     char text[32] = {};
     uint8_t styleMask = 0;

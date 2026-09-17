@@ -1,4 +1,5 @@
 #include <Epub/Page.h>
+#include <FontCacheManager.h>
 #include <Logging.h>
 
 #include <algorithm>
@@ -47,6 +48,7 @@ void EpubReaderActivity::publishSnapshot() {
       showBookmarkMessage || showDictionaryMessage ||
       (!readerPaused &&
        (automaticPageTurnActive || pageTurns.getCounts().pending != 0 ||
+        (renderer.getFontCacheManager() && renderer.getFontCacheManager()->isPrewarming()) ||
         (section && (section->isBuilding() || (section->isPartial() && !partialRebuildStartFailed) ||
                      (renderer.getFontCacheManager() && section->currentPage + 1 < section->pageCount &&
                       (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage))))));
@@ -72,6 +74,8 @@ void EpubReaderActivity::runCommand(Command& command) {
 
 void EpubReaderActivity::changeReaderContext() {
   ++readerContext;
+  if (auto* cache = renderer.getFontCacheManager()) cache->cancelPrewarm();
+  idlePrewarmSpine = idlePrewarmPage = -1;
   currentPageVisibleOffset.reset();
   cancelPageTurns(EpubPageTurns::Outcome::ContextChanged, "reader context");
 }
@@ -180,7 +184,12 @@ void EpubReaderActivity::executeCommand(Command& command) {
       }
       break;
     case Control::Footnotes:
-      command.footnotes = std::move(currentPageFootnotes);
+      if (command.flag && currentPageFootnotes.size() == 1) {
+        changeReaderContext();
+        navigateToHrefOnRender(currentPageFootnotes.front().href, true);
+      } else {
+        command.footnotes = std::move(currentPageFootnotes);
+      }
       break;
     case Control::RestoreFootnotes:
       currentPageFootnotes = std::move(command.footnotes);

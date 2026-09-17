@@ -88,4 +88,4 @@ struct ActivityResult {
 };
 
 // A result has one recipient, which may take ownership of its payload.
-using ActivityResultHandler = std::function<void(ActivityResult&)>;
+using ActivityResultHandler = std::function<void(ActivityResult&&)>;
